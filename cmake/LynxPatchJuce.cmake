@@ -54,6 +54,13 @@
 #    are linked at all (juceaide and every JUCE target fail with ~65 undefined references). The three mingwLibs lines
 #    LYNX carries in its vendored JUCE checkout are restored; JUCE's own CMake module support links them (MinGW branch
 #    of JUCEModuleSupport.cmake).
+# 14. Windows only, juce_gui_basics/native/juce_NativeMessageBox_windows.cpp: JUCE calls TaskDialogIndirect through a
+#    static import. That function only exists in comctl32 v6, which a process only gets when its manifest declares the
+#    Microsoft.Windows.Common-Controls side-by-side assembly; without one the loader binds comctl32 5.82 from System32,
+#    which exports no TaskDialog* functions. A VST2 plugin inherits the host's activation context, so in hosts whose
+#    executable has no v6 manifest (LMMS's RemoteVstPlugin64.exe) the plugin DLL fails to load with
+#    STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139, "Entry Point Not Found") before any of its code runs. The function is
+#    resolved dynamically instead, falling back to MessageBoxW when comctl32 v6 is unavailable.
 #
 # Used by CMake (lynx_patch_juce on the fetched JUCE) and by scripts/build-windows-zig.sh, which runs this file with
 # `cmake -DJUCE_DIR=<a copy of JUCE's juce_gui_basics module> -P cmake/LynxPatchJuce.cmake`.
@@ -207,6 +214,15 @@ function(lynx_patch_juce_file file)
         lynx_juce_fix("MinGW uuidof on ComSmartPtr (surface)" "__uuidof (IDXGISurface)"
             "__uuidof (surface)"
             "__uuidof (IDXGISurface)")
+    elseif(file MATCHES "juce_NativeMessageBox_windows\.cpp$")
+        # TaskDialogIndirect only exists in comctl32 v6 (WinSxS Microsoft.Windows.Common-Controls). A VST2 plugin
+        # inherits the host's activation context, so in a host without a v6 manifest (LMMS's RemoteVstPlugin64.exe)
+        # the static import fails to resolve at load time (0xC0000139) and the plugin never loads. Resolve it
+        # dynamically instead; without comctl32 v6 fall back to MessageBoxW (OK/Cancel -> 1/2, matching the
+        # TASKDIALOG result convention JUCE maps to its button indices).
+        lynx_juce_fix("TaskDialogIndirect resolved dynamically" "LYNX patch: TaskDialogIndirect"
+            "                int buttonIndex = 0;|NL|                TaskDialogIndirect (&config, &buttonIndex, nullptr, nullptr);|NL||NL|                return buttonIndex;"
+            "                int buttonIndex = 0;|NL||NL|                // LYNX patch: TaskDialogIndirect only exists in comctl32 v6, which a host process only|NL|                // provides when its manifest declares Microsoft.Windows.Common-Controls. A VST2 plugin inherits|NL|                // the host's activation context, so resolve dynamically and fall back to MessageBoxW.|NL|                using LynxTaskDialogIndirectFn = HRESULT (WINAPI*) (const TASKDIALOGCONFIG*, int*, int*, BOOL*);|NL|                static const LynxTaskDialogIndirectFn taskDialogIndirect = [] () -> LynxTaskDialogIndirectFn|NL|                {|NL|                    auto* comctl = GetModuleHandleW (L\"comctl32.dll\");|NL|                    return comctl != nullptr ? reinterpret_cast<LynxTaskDialogIndirectFn> (GetProcAddress (comctl, \"TaskDialogIndirect\")) : nullptr;|NL|                }();|NL||NL|                if (taskDialogIndirect != nullptr)|NL|                {|NL|                    taskDialogIndirect (&config, &buttonIndex, nullptr, nullptr);|NL|                }|NL|                else|NL|                {|NL|                    const UINT flags = MB_OKCANCEL|NL|                                     | (options.getIconType() == MessageBoxIconType::WarningIcon ? MB_ICONWARNING|NL|                                      : options.getIconType() == MessageBoxIconType::InfoIcon     ? MB_ICONINFORMATION|NL|                                      : options.getIconType() == MessageBoxIconType::QuestionIcon ? MB_ICONQUESTION|NL|                                                                                                  : 0);|NL|                    buttonIndex = MessageBoxW (parent, message.toWideCharPointer(), title.toWideCharPointer(), flags) == IDOK ? 1 : 2;|NL|                }|NL||NL|                return buttonIndex;")
     elseif(file MATCHES "extras/Build/juceaide/CMakeLists.txt$")
         # MinGW embeds no default manifest (MSVC's linker does), and juceaide is built with
         # _NO_RESOURCERC, so juceaide.exe binds comctl32 v5 and the TaskDialogIndirect import from
@@ -252,6 +268,7 @@ function(lynx_patch_juce juce_dir)
     lynx_patch_juce_file("${juce_dir}/modules/juce_core/native/juce_SystemStats_windows.cpp")
     lynx_patch_juce_file("${juce_dir}/modules/juce_graphics/image_formats/juce_JPEGLoader.cpp")
     lynx_patch_juce_file("${juce_dir}/modules/juce_graphics/native/juce_Direct2DResources_windows.cpp")
+    lynx_patch_juce_file("${juce_dir}/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp")
 endfunction()
 
 # run as a script: cmake -DJUCE_DIR=<dir> -P cmake/LynxPatchJuce.cmake
