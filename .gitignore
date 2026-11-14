@@ -1,0 +1,32 @@
+# Build directories
+build/
+build3/
+build-*/
+_deps/
+
+# Compiled artifacts
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Editor / OS noise
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Logs and temp
+*.log
+*.tmp
