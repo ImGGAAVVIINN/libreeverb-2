@@ -28,13 +28,9 @@ namespace lynx::vst2
 
 namespace
 {
-// The embedded frontend must not discover FL Studio (its FL preset lists then come back empty;
-// LYNX's own factory presets and user presets are unaffected). Set before any component exists.
-struct FlDiscoveryOff
-{
-    FlDiscoveryOff() { setFlStudioDiscoveryDisabled (true); }
-};
-const FlDiscoveryOff flDiscoveryOff {};
+// The embedded frontend discovers FL Studio so its FL preset lists come back populated and the
+// preset bar can list factory and user presets. setFlStudioDiscoveryDisabled stays available
+// (public API, default false = enabled) for hosts that want to opt out.
 // The mixer slot the frontend edits: "Insert 1" of LYNX's default mixer (0 is the Master).
 constexpr int editorTrack = 1;
 constexpr int editorSlot = 0;

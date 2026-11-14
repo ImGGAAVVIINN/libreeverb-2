@@ -55,8 +55,9 @@ namespace lynx
 {
 using IONode = juce::AudioProcessorGraph::AudioGraphIOProcessor;
 
-// Set by the VST2 plugin's editor glue: the embedded frontend must not discover FL Studio
-// (no registry reads, no installation scans), so its FL preset lists come back empty.
+// Set by hosts that want to opt out of FL Studio discovery (no registry reads, no installation
+// scans). The VST2 editor glue leaves it at the default false so the embedded frontend's FL preset
+// lists come back populated and the preset bar can list factory and user presets.
 static std::atomic<bool> flStudioDiscoveryDisabled { false };
 
 void setFlStudioDiscoveryDisabled (bool disabled) { flStudioDiscoveryDisabled.store (disabled); }

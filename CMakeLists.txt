@@ -100,3 +100,6 @@ target_link_libraries(lynx_core PUBLIC vorbis_decoder)
 # ---------------------------------------------------------------------------
 # The VST2 plugin
 add_subdirectory(src/vst2)
+
+# Tests
+add_subdirectory(tests)
