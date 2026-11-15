@@ -30,3 +30,6 @@ Thumbs.db
 # Logs and temp
 *.log
 *.tmp
+
+# Local debugging toolkit and screenshots (session artifacts, not part of the plugin)
+_debug/
