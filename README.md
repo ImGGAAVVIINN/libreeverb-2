@@ -6,7 +6,10 @@ A standalone 64-bit Windows VST2 audio effect extracted from
 The plugin reuses LYNX's existing Reeverb 2 DSP implementation unchanged (all 15 original
 parameters, sample-rate-dependent behaviour, stereo processing and tempo-synchronised
 predelay) and embeds LYNX's existing JUCE frontend (`makeNativeEffectEditor` in
-`src/ui/PluginEditors.cpp`) as its editor — no hand-written replacement GUI.
+`src/ui/PluginEditors.cpp`) as its editor — no hand-written replacement GUI. The editor
+tracks LYNX's current orange Reeverb 2 theme: the frontend sources under `src/ui/`,
+`src/core/` and their `.inc` assets are direct ports of the corresponding LYNX
+implementation (upstream commit `efb8825`), not a re-skin.
 
 ## Requirements
 

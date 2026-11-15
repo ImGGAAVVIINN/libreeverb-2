@@ -109,8 +109,16 @@ enum class InstrumentKind : std::uint8_t
                 // pluginState; plays the video's sound in sync with the song, the video is shown by its editor
     keplerExo,  // FL 2026's Kepler Exo (REA_rodada167d): Kepler's engine with the "Kepler-2" state in pluginState, the user's
                 // Kepler Exo engine_x64.dll in samplePath
-    wavetraveller // FL's Wave Traveller (REA_rodada167f, core/WaveTraveller.h): FL's state (per-key curves) in pluginState,
-                  // the channel's sample in samplePath
+    wavetraveller, // FL's Wave Traveller (REA_rodada167f, core/WaveTraveller.h): FL's state (per-key curves) in pluginState,
+                   // the channel's sample in samplePath
+    fruityslicer,  // FL's Fruity Slicer (round 180c, core/FruitySlicer.h): FL's state (slices, fades, declick...) in pluginState,
+                   // the sample in samplePath; the sampler's voices play the slices
+    slicex,        // FL's Slicex (rounds 190h / 190l, core/SlicexInstrument.h): FL's state in pluginState, deck A's sample in
+                   // samplePath, deck B's in zones[0].path
+    fpc,           // FL's FPC (round 190q, core/Fpc.h, core/FpcInstrument.h): the kit's FL state in pluginState, the files of its
+                   // layers in `zones` (one per layer with a sample, in the state's order; only `path` is used)
+    pocketSuperSaw // Pocket SuperSaw (round 190by, core/PocketSuperSaw.h): FL Studio Mobile's SuperSaw module; its 59
+                   // values 0…1 in modelParams (FLM's parameter k + 1 at index k)
 };
 
 // External plugin: format identifier (the app knows how to find the file) + saved state.

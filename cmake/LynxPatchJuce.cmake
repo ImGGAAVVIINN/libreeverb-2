@@ -1,4 +1,4 @@
-﻿# Small fixes LYNX applies to the JUCE sources before they are compiled (idempotent: a patched file is left alone).
+# Small fixes LYNX applies to the JUCE sources before they are compiled (idempotent: a patched file is left alone).
 #
 # 1. Linux drag & drop from a Wayland file manager (issue #11, round 165s). On GNOME (mutter) and KDE (KWin) Wayland the
 #    compositor's XWayland bridge sends XdndEnter with XDND version 5 to every X11 window, whatever version the window

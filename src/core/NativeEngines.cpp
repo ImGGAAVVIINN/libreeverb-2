@@ -1,13 +1,21 @@
 #include "core/NativeEngines.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/Effects.h"
 #include "core/FlEffects.h"
+#include "core/FlSamplers.h"
+#include "core/Fpc.h"
 #include "core/GrossBeat.h"
+#include "core/HardcoreFx.h"
+#include "core/Harmless.h"
+#include "core/HarmlessFx.h"
 #include "core/LynxBanks.h"
 #include "core/MidiOut.h"
+#include "core/MixSuite.h"
 #include "core/PhysicalModels.h"
+#include "core/Slicex.h"
 #include "flp/Flp.h"
 
 namespace lynx::natives
@@ -54,6 +62,7 @@ FlpImportOptions importOptions (const FlAccess& access)
     options.fileExists = access.fileExists;
     options.readFile = access.readFile;
     options.saveEmbedded = access.saveEmbedded;
+    options.fpcAsChannel = true; // (an FPC kit preset: the whole kit on the channel)
     return options;
 }
 
@@ -122,6 +131,7 @@ const std::vector<InstrumentEngine>& instrumentEngines()
         { InstrumentKind::boobass, "BooBass", "", fl, false }, // (its multisample: the user's BooBass_Eng_x64.dll)
         { InstrumentKind::simsynth, "SimSynth", "SimSynth", own, false },
         { InstrumentKind::minisynth, "MiniSynth", "MiniSynth", fl, false },
+        { InstrumentKind::pocketSuperSaw, "Pocket SuperSaw", "", own, false }, // (FL Studio Mobile's SuperSaw: plays from its defaults)
         { InstrumentKind::dx10, "Fruity DX10", "Fruity DX10", own, false },
         { InstrumentKind::plucked, "Plucked!", "Plucked!", own, false },
         { InstrumentKind::sawer, "Sawer", "Sawer", fl, false },
@@ -130,8 +140,11 @@ const std::vector<InstrumentEngine>& instrumentEngines()
         { InstrumentKind::slayer, "FL Slayer", "FL Slayer", fl, false },
         { InstrumentKind::granulizer, "Fruity Granulizer", "Fruity Granulizer", fl, false },
         { InstrumentKind::wavetraveller, "Wave Traveller", "Wave Traveller", own, false },
+        { InstrumentKind::fruityslicer, "Fruity Slicer", "Fruity Slicer", own, false },
+        { InstrumentKind::slicex, "Slicex", "", own, false }, // (round 190r: a new one is FL's Default preset values, decks empty)
         { InstrumentKind::drumaxx, "Drumaxx", "Drumaxx", fl, false },
         { InstrumentKind::drumpad, "Drumpad", "Drumpad", fl, false },
+        { InstrumentKind::fpc, "FPC", "FPC", own, false }, // (without FL: FL's empty kit; the kits are FL's and the user's .fst files)
         { InstrumentKind::fruitkick, "Fruit Kick", "Fruit Kick", fl, false },
         { InstrumentKind::bassdrum, "BassDrum", "BassDrum", fl, false },
     };
@@ -182,16 +195,14 @@ std::vector<std::string> presetCandidates (const std::string& presetFolder, bool
     const auto folder = std::string ("%FLStudioData%\\Patches\\Plugin presets\\") + (generator ? "Generators\\" : "Effects\\") + presetFolder;
     const auto exists = [&access] (const std::string& p) { return ! p.empty() && access.fileExists && access.fileExists (p); };
 
-    for (const auto* name : { "Default.fst", "Default.tbio", "Default\\Default.tbio" })
-        if (const auto path = resolveFlPath (folder + "\\" + name, access.roots); exists (path))
-            out.push_back (path);
-
-    // then, for the drum generators FL ships without a Default.fst, the plugin's entry in FL's Plugin database
-    // (Generators\Drum\<plugin>.fst): the state FL itself adds when the plugin is picked (Drumaxx' "Default Kit",
-    // REA_rodada169e §1), before any other preset of the folder. (Other engines keep their folder order: e.g.
-    // Morphine's Plugin database state plays differently from the preset LYNX starts it from; not checked yet.)
-    const auto drum = presetFolder == "Drumaxx" || presetFolder == "Drumpad" || presetFolder == "BassDrum";
-    if (generator && drum && access.listPresets)
+    // FL adds a new generator from its Plugin database (the Channel rack's "+" / the plugin picker load the entry's .fst
+    // into the new channel, REA_rodada169l §3): for every generator that entry (Generators\<category>\<plugin>.fst)
+    // comes first — Drumaxx' "Default Kit" (REA_rodada169e §1), Transistor Bass' "Factory programs", Sakura's "Bowed 6",
+    // Ogun's version-11 state, and the engines whose Default preset differs from it (3x Osc, Sytrus, Harmor, Harmless,
+    // PoiZone, MiniSynth, Sawer, FL Keys, Granulizer, Toxic, BeepMap: user decision, round 169l2). Where FL's Default.fst
+    // equals it (Kepler, SimSynth, DX10, Plucked!, Fruit Kick) nothing changes; an entry LYNX can't read falls through to
+    // the Default preset, then the folder.
+    if (generator && access.listPresets)
     {
         const auto wanted = lower (presetFolder + ".fst");
         for (const auto& path : access.listPresets (resolveFlPath ("%FLStudioData%\\Patches\\Plugin database\\Generators", access.roots)))
@@ -205,6 +216,10 @@ std::vector<std::string> presetCandidates (const std::string& presetFolder, bool
             }
         }
     }
+
+    for (const auto* name : { "Default.fst", "Default.tbio", "Default\\Default.tbio" })
+        if (const auto path = resolveFlPath (folder + "\\" + name, access.roots); exists (path) && std::find (out.begin(), out.end(), path) == out.end())
+            out.push_back (path);
 
     if (access.listPresets)
         for (const auto& path : access.listPresets (resolveFlPath (folder, access.roots)))
@@ -222,7 +237,7 @@ std::string defaultPresetPath (const std::string& presetFolder, bool generator, 
 
 namespace
 {
-// BooBass has no preset folder: a new one is its three knobs at their defaults (0.5, REA_rodada29 §4) over the
+// BooBass has no preset folder: a new one is its three knobs at FL's Plugin database values (32767) over the
 // multisample of the user's own engine DLL
 std::string booBassDll (const FlAccess& access)
 {
@@ -310,7 +325,9 @@ std::optional<ChannelDef> makeChannel (InstrumentKind kind, const FlAccess& acce
         def.name = engine->name;
         def.instrument = kind;
         def.samplePath = dll;
-        def.modelParams = { 32768.0f, 32768.0f, 32768.0f };
+        // FL's new BooBass is its Plugin database state (Generators\Misc\BooBass.fst: version 1, the three knobs at
+        // 0x7fff; round 169l)
+        def.modelParams = { 32767.0f, 32767.0f, 32767.0f };
         return def;
     }
 
@@ -334,6 +351,10 @@ std::optional<ChannelDef> makeChannel (InstrumentKind kind, const FlAccess& acce
     ChannelDef def; // LYNX's own default: the engine plays from an empty state
     def.name = engine->name;
     def.instrument = kind;
+    if (kind == InstrumentKind::slicex)
+        def.pluginState = slicex::write (slicex::fresh());
+    if (kind == InstrumentKind::fpc) // FL's "Empty" kit (32 pads on FL's default notes, no samples)
+        setFpcKit (def, fpc::emptyKit(), {});
     return def;
 }
 
@@ -362,6 +383,16 @@ std::optional<ChannelDef> autogunShotChannel (const FlAccess& access)
     return std::nullopt;
 }
 
+FlDataReader flDataReader (const FlAccess& access)
+{
+    return [&access] (const std::string& relative) -> std::vector<std::uint8_t> {
+        const auto p = resolveFlPath ("%FLStudioFactoryData%\\" + relative, access.roots);
+        if (p.empty() || ! access.readFile || (access.fileExists && ! access.fileExists (p)))
+            return {};
+        return access.readFile (p);
+    };
+}
+
 std::optional<EffectSlot> makeSlot (EffectKind kind, const FlAccess& access, double bpm)
 {
     const auto* engine = effectEngine (kind);
@@ -376,18 +407,20 @@ std::optional<EffectSlot> makeSlot (EffectKind kind, const FlAccess& access, dou
             const auto project = flp::parseProject (bytes, true);
             if (! project.channels.empty() && ! project.channels.front().pluginState.empty())
             {
-                const FlDataReader data = [&access] (const std::string& relative) -> std::vector<std::uint8_t> {
-                    const auto p = resolveFlPath ("%FLStudioFactoryData%\\" + relative, access.roots);
-                    if (p.empty() || ! access.readFile || (access.fileExists && ! access.fileExists (p)))
-                        return {};
-                    return access.readFile (p);
-                };
                 auto slot = effectFromFl (project.channels.front().pluginName.empty() ? engine->presetFolder : project.channels.front().pluginName,
-                                          project.channels.front().pluginState, bpm, data);
+                                          project.channels.front().pluginState, bpm, flDataReader (access));
                 if (slot && slot->kind == kind)
                 {
                     if (kind == EffectKind::grossBeat)
+                    {
                         grossbeat::setPpq (slot->state, 96);
+                        // round 173d: FL's Default preset keeps every slot empty (FL fills a new instance from its default
+                        // bank, not in the preset): with it every slot picked in the editor, and the attack / release /
+                        // tension / mix knobs, did nothing. A new instance starts on LYNX's factory slots, as without FL
+                        const auto names = grossbeat::slotNames (slot->state, false);
+                        if (std::all_of (names.begin(), names.end(), [] (const std::string& n) { return n.empty(); }))
+                            slot->state = grossbeat::factoryContainer();
+                    }
                     return slot;
                 }
             }
@@ -406,7 +439,28 @@ std::optional<EffectSlot> newEffect (EffectKind kind, const FlAccess& access, do
 {
     if (effectEngine (kind) != nullptr)
         return makeSlot (kind, access, bpm);
-    return makeEffectSlot (kind);
+    auto slot = makeEffectSlot (kind);
+    // round 173d: a new Hardcore carries the cabinet impulses of the user's FL installation, as one imported from an
+    // .flp does (hardcore::fromFl); before, its Cabinet menu did nothing on a new instance. Without FL it has none.
+    if (kind == EffectKind::hardcore && access.readFile)
+    {
+        std::vector<std::pair<int, std::vector<std::uint8_t>>> files;
+        for (int c = 1; c <= hardcore::numCabinets; ++c)
+        {
+            const auto p = resolveFlPath ("%FLStudioFactoryData%\\" + hardcore::cabinetPath (c), access.roots);
+            if (p.empty() || (access.fileExists && ! access.fileExists (p)))
+                continue;
+            if (auto b = access.readFile (p); ! b.empty())
+                files.emplace_back (c, std::move (b));
+        }
+        if (! files.empty())
+            slot.state = hardcore::packCabinets (files);
+    }
+    // round tp172d: an Ember added by hand opens on its Classic panel (the hardware saturator, its role); its multiband
+    // page is one click away ("Advanced"). makeEffectSlot's default (the multiband engine) stays, for loaded projects
+    if (kind == EffectKind::ember)
+        slot.params[(std::size_t) mixsuite::ember::voicing] = 1.0f;
+    return slot;
 }
 
 std::string effectMenuName (EffectKind kind)
@@ -421,4 +475,25 @@ std::string instrumentMenuName (const InstrumentEngine& e)
 {
     return std::string (e.name) + (e.beta ? " (beta)" : "");
 }
+void followControl (ChannelDef& c, int index, const FlAccess& fl)
+{
+    if (c.instrument != InstrumentKind::harmless || index != harmlessComboIndex + 3 || c.modelParams.size() < (std::size_t) harmlessCompIndex)
+        return;
+    // the type's Maximus state follows the settings (byte count, then the bytes), as FlpImport stores it
+    c.modelParams.resize ((std::size_t) harmlessCompIndex);
+    const auto type = (int) std::lround (c.modelParams[(std::size_t) harmlessComboIndex + 3]);
+    if (type <= 0 || ! fl.readFile)
+        return;
+    const auto path = resolveFlPath ("%FLStudioFactoryData%\\Plugins\\Fruity\\Generators\\Harmless\\Data\\Compression\\" + std::to_string (type) + ".fst",
+                                     fl.roots);
+    if (path.empty() || (fl.fileExists && ! fl.fileExists (path)))
+        return;
+    const auto state = hlfx::maximusStateFromFst (fl.readFile (path));
+    if (! state || hlfx::makeMaximusPreset (*state) == nullptr)
+        return;
+    c.modelParams.push_back ((float) state->size());
+    for (const auto byte : *state)
+        c.modelParams.push_back ((float) byte);
+}
+
 } // namespace lynx::natives

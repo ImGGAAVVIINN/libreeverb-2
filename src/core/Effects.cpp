@@ -1949,6 +1949,9 @@ private:
 // signal (Replace) or the dry input alone (Mix) — what FL does with nothing arriving on the Pitcher's MIDI port.
 namespace pcorr
 {
+constexpr int midiPortParam = 42, portRoutingParam = 43;
+int midiPort (float v) noexcept { return v > 0.0f ? std::min (255, (int) (v * 256.0f) - 1) : -1; }
+float midiPortValue (int port) noexcept { return port < 0 ? 0.0f : std::min (1.0f, ((float) port + 1.5f) / 256.0f); }
 constexpr double minHz[6] { 220.0, 170.0, 110.0, 80.0, 55.0, 25.0 };
 int range (float v) { return std::clamp ((int) std::lround (v * 5.0f), 0, 5); }
 double noteA (float v) { return 55.0 * std::pow (2.0, (2.0 * v - 1.0) / 12.0); } // ×8 = A 440 at v = 0.5
@@ -2814,6 +2817,8 @@ const EffectInfo& effectInfo (EffectKind kind)
                                                  { "Harmonize", 0.0f }, { "MIDI", 0.0f }, { "Octaves", 0.0f }, { "Mix", 0.0f },
                                                  { "Vel", 0.0f }, { "Voice 1 pan", 0.5f }, { "Voice 2 pan", 0.5f },
                                                  { "Voice 3 pan", 0.5f }, { "Voice 4 pan", 0.5f } });
+        // round 190ee: FL's MIDI port (none by default) and how notes arrive (older projects: Port routing off)
+        info.params.insert (info.params.end(), { { "MIDI port", 0.0f }, { "Port routing", 1.0f } });
         return info;
     }();
     static const EffectInfo lofiInfo { "Lo-fi", { { "Rate", 0.0f }, { "Bits", 0.0f }, { "Mix", 1.0f } } };
@@ -3796,8 +3801,34 @@ EffectSlot makeEffectSlot (EffectKind kind)
     return slot;
 }
 
+bool effectHasMidiPort (EffectKind kind) noexcept { return kind == EffectKind::grossBeat || kind == EffectKind::pitchCorrect; }
+
+int effectMidiInPort (const EffectSlot& slot) noexcept
+{
+    if (slot.kind == EffectKind::grossBeat)
+        return std::clamp (slot.plugin.midiInPort, -1, 255);
+    if (slot.kind == EffectKind::pitchCorrect && slot.params[(std::size_t) pcorr::portRoutingParam] > 0.5f)
+        return pcorr::midiPort (slot.params[(std::size_t) pcorr::midiPortParam]);
+    return -1;
+}
+
+void setEffectMidiInPort (EffectSlot& slot, int port) noexcept
+{
+    port = std::clamp (port, -1, 255);
+    if (slot.kind == EffectKind::grossBeat)
+        slot.plugin.midiInPort = port;
+    else if (slot.kind == EffectKind::pitchCorrect)
+    {
+        slot.params[(std::size_t) pcorr::midiPortParam] = pcorr::midiPortValue (port);
+        slot.params[(std::size_t) pcorr::portRoutingParam] = 1.0f; // (an older project's Pitcher moves to FL's routing)
+    }
+}
+
 void upgradeLoadedEffectParams (EffectSlot& slot, std::size_t savedCount) noexcept
 {
+    // round 190ee: a Pitcher saved before its MIDI port keeps taking the notes held on the Channel Rack (round 173d)
+    if (slot.kind == EffectKind::pitchCorrect && savedCount <= (std::size_t) pcorr::portRoutingParam)
+        slot.params[(std::size_t) pcorr::portRoutingParam] = 0.0f;
     // round 147: Prism Multiband saved before its measured Dynamic phase engine keeps the round-108 construction
     if (slot.kind == EffectKind::prismMultiband && savedCount <= (std::size_t) dyn::prism::dynamicEngine)
         slot.params[(std::size_t) dyn::prism::dynamicEngine] = 0.0f;

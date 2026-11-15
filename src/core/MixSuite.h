@@ -128,6 +128,12 @@ enum Param
     eqToSidechain,
     count
 };
+// round tp172c6: the drive models (DRIVE section), in the Model selector's order
+enum DriveModel { driveSaturate, driveConsoleE, driveConsoleG, driveConsoleA, driveConsoleN, driveConsoleY, driveTube,
+                  driveGuitarAmp, driveBassAmp, driveModels };
+int driveModelIndex (float v) noexcept;
+float driveModelValue (int model) noexcept;
+const char* driveModelName (int model) noexcept;
 // round 147b: the auto make-up (dB) for Ridge's own compressor: the console's for the same threshold (dBFS + 18 = the
 // console's dBu scale) and ratio; 0 with the compressor off
 double autoMakeupDb (const EffectParams& p) noexcept;

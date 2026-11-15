@@ -40,6 +40,12 @@ EffectSlot makeEffectSlot (EffectKind kind);
 // A slot loaded from a project that stored `savedCount` parameters: parameters added later that switch an engine
 // to a newer construction get the value that keeps the old sound (round 147: Prism's measured Dynamic phase).
 void upgradeLoadedEffectParams (EffectSlot& slot, std::size_t savedCount) noexcept;
+// Round 190ee: the effects that listen to a MIDI input port (FL: the notes of the MIDI Out channels on that port):
+// Gross Beat (its wrapper's port, kept in EffectSlot::plugin.midiInPort) and Pitcher (its own MIDI port parameter,
+// FL's raw parameter 33). −1 = none; a Pitcher of an older project (Port routing off) listens to no port.
+bool effectHasMidiPort (EffectKind kind) noexcept;
+int effectMidiInPort (const EffectSlot& slot) noexcept;
+void setEffectMidiInPort (EffectSlot& slot, int port) noexcept; // −1…255
 
 // 7-band parametric EQ. Parameters: band b uses [4b .. 4b+3] = type, frequency, gain, Q;
 // [28] = output; [29 + b] = cut slope (1 to 4 biquads: 12/24/36/48 dB per octave).

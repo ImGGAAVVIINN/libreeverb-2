@@ -57,7 +57,7 @@ inline juce::Colour meterClip { 0xffff3b3f };
 inline juce::Colour knobArc { 0xffc5c9d1 };     // rotary value arcs at rest (accent while touched)
 inline juce::Colour knobTrack { 0xff444955 };   // the unlit part of a knob's ring (reads on every panel surface)
 inline juce::Colour stepOff { 0xff2a2d34 };
-inline juce::Colour stepOffAlt { 0xff33363f };   // every other group of 4 steps
+inline juce::Colour stepOffAlt { 0xff4c3f46 };   // every other group of 4 steps (a dull reddish grey, round 170a2)
 inline juce::Colour stepOn { 0xffe5383b }; // = accent
 inline juce::Colour stepNote { 0xffe8a3a6 };     // a step that only has a Piano Roll note
 inline juce::Colour gridBar { 0xff3a3e47 };      // bar lines
@@ -96,10 +96,21 @@ inline juce::FontOptions font (float size, bool bold = false)
 // The width a column of labels needs: `minWidth` when every text fits in it (the English layout), else the widest
 // text (+ the label borders), up to `maxWidth` (round 165o: translated labels are often longer).
 int labelColumnWidth (std::initializer_list<const juce::Label*> labels, int minWidth, int maxWidth);
+
+// A menu item's text with FL's accelerator letter `key` (core/MenuMnemonic.h, round 170a): the letter is underlined in
+// the menu and typing it picks the item, e.g. theme::mnemonic (tr ("Delete..."), 'D').
+juce::String mnemonic (const juce::String& text, char key);
 // Japanese / Korean / Chinese: the installed UI font family LYNX uses for that language (empty: none installed, or a
 // language that needs no font of its own — see needsOwnFont).
 juce::String uiFontForLanguage (const juce::String& languageId);
 bool needsOwnFont (const juce::String& languageId);
+
+// Settings › General › Interface font (round 179a). The platform's default family (empty on macOS: JUCE's own pick), the
+// installed families for the list, and the choice saved in the profile (empty: the default).
+juce::String defaultUiFont();
+juce::StringArray installedUiFonts();
+juce::String savedUiFont();
+void saveUiFont (const juce::String& family);
 
 // Same for a text button (its padding included).
 int buttonWidth (const juce::TextButton& button, int minWidth, int maxWidth);
@@ -191,6 +202,9 @@ inline juce::String caps (const juce::String& text)
 // g.setColour (colour) + g.fillRoundedRectangle, faster where the frame is drawn on the CPU (Linux): nothing outside the
 // clip, a plain rectangle when the clip misses the corners, the shape (or a big one's corners) from a cached sprite.
 void fillRoundRect (juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour colour);
+// The frozen mark (round 190ay, Freeze): a small tag with a six-armed snowflake, in the shape of the stand-in tag. `tag`
+// is the tag's fill (the info colour while the frozen audio is up to date, the warning colour when it needs attention).
+void drawFrozenTag (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour tag, juce::Colour flake);
 
 // FL's number wheel ("digiwheel": channel RANGE / TRACK, the rack's insert box) in the LYNX skin: a dark inset display,
 // red only while hovered or dragged. Draws the box (with FL's small up / down marks at its right when `marks`); returns
@@ -216,6 +230,13 @@ inline juce::Colour accentBlue { 0xff6ea8fe }; // = colour::info
 inline juce::Colour playhead { 0xffe5383b }; // = colour::playhead
 inline juce::Colour text { 0xffeceef2 }; // = colour::textPrimary
 
+// --- fonts of the system (issue #142) ------------------------------------------------------------------
+// The folders JUCE scans for fonts, from the ones fontconfig knows (Linux): only absolute, existing folders JUCE's
+// list can carry, none of them inside another one of the list (JUCE reads each with everything below it).
+juce::StringArray fontFoldersToScan (const juce::StringArray& fontconfigFolders, const std::function<bool (const juce::String&)>& exists);
+// --selftest "fonts=": every font LYNX draws with has a typeface and glyphs, and a font without one does not crash.
+juce::String fontSelfTest();
+
 // --- LookAndFeel ---------------------------------------------------------------------------------
 class LookAndFeel final : public juce::LookAndFeel_V4
 {
@@ -229,6 +250,13 @@ public:
     // other Latin UI fonts have no CJK glyphs; the font fallback would otherwise pick a CJK face per run, which may be
     // a Chinese face for Japanese text). Returns the chosen family, or empty when the default is kept.
     juce::String applyLanguageFont (const juce::String& languageId);
+
+    // At start-up: the font saved in Settings (runOverride: --uifont, for this run only) when it is installed, else
+    // the default for this language (applyLanguageFont). Returns the family chosen, empty when the default stays.
+    juce::String applyInterfaceFont (const juce::String& languageId, const juce::String& runOverride = {});
+
+    // Every font gets a typeface (issue #142): one whose family is not installed draws with LYNX's own font.
+    juce::Typeface::Ptr getTypefaceForFont (const juce::Font&) override;
 
     // property set on a Button / TabBarButton to draw one of lynx::Icon next to (or instead of) its text
     static constexpr const char* iconProperty = "lynxIcon";

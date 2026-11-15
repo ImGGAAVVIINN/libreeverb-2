@@ -61,6 +61,25 @@ void headerBar (juce::Graphics&, juce::Rectangle<float> area, juce::Colour accen
 void brandMark (juce::Graphics&, juce::Rectangle<float> area);
 // the plugin's name in the header (bold, with a short accent underline); returns the width used
 float titleText (juce::Graphics&, juce::Rectangle<float> area, const juce::String& name, juce::Colour accent, bool underline = true);
+// round 170k2: the name always fits its box: the style's size, then smaller (down to 10 px), then "Fruity" on a small
+// line above the rest; an ellipsis only when even that cannot fit. titleMinWidth: the narrowest box that still shows
+// the whole name (in the current style, for a header this high). lastTitleFit: what the last titleText did (shots).
+float titleMinWidth (const juce::String& name, float height);
+struct TitleFit
+{
+    float need = 0.0f, have = 0.0f, size = 0.0f; // the name's width at the style's size, the box's width, the size used
+    int lines = 1;
+    bool clipped = false;                         // drawn with an ellipsis
+};
+TitleFit lastTitleFit();
+void resetTitleFit();
+// one line of text in the current gradient (or image) fill, drawn as its glyph outlines; the empty outlines (spaces)
+// are left out (round 170c: JUCE 8.0.4's CoreGraphics renderer took an empty outline as "no clip" and flooded the
+// whole component with the gradient, Facet EQ's blank pink window on macOS, issue #11). A plain colour fill draws
+// the text as usual.
+void drawFilledText (juce::Graphics&, const juce::String& text, juce::Rectangle<float> area, juce::Justification justification);
+// --gfxprobe: does a gradient-filled text or an empty gradient-filled path stay inside its shape on this platform?
+juce::String rendererProbeReport();
 // a power LED with a halo when on
 void powerLed (juce::Graphics&, juce::Point<float> centre, float diameter, bool on);
 // a raised section (group of controls) and its title strip (caps, with an accent dot)
@@ -87,8 +106,15 @@ struct KnobLook
     float hover = 0.0f;   // 0..1 (animated by the owner, or 0 / 1)
     bool active = false;  // being dragged
     bool enabled = true;  // the plugin is on
+    // round tp172c: the cap's own colour (a console's colour-coded knobs: red HF, green HMF...); transparent = the
+    // theme's. Only the themed style reads it, through the theme's capTint hook (see capTintFor)
+    juce::Colour capTint {};
 };
 void knob (juce::Graphics&, juce::Rectangle<float> bounds, const KnobLook&);
+// round tp172c: the cap colour the current plugin theme gives the knob of this parameter (transparent = none)
+juce::Colour capTintFor (const char* param);
+// round tp172c: the current plugin theme's colour for an OFF toggle's label (transparent = the global one)
+juce::Colour offLabelColour();
 
 // a slider track (vertical or horizontal) with its lit part and a thumb
 void slider (juce::Graphics&, juce::Rectangle<float> trackArea, float value01, bool vertical, bool bipolar, juce::Colour accent, bool hot,
@@ -111,8 +137,37 @@ void valuePlate (juce::Graphics&, juce::Rectangle<float> area, float corner);
 // --- plugin style (round 126) ---------------------------------------------------------------------
 // The look every built-in editor is drawn in (Settings > General > Plugin style): Glow (the default kit above),
 // Neon, Hardware or Vivid (ui/PluginStyles.inc). Only the drawing changes; layouts and gestures never do.
-enum class Style { glow = 0, neon, hardware, vivid };
-inline constexpr int styleCount = 4;
+//
+// Round 170j adds "Themed": a plugin that has its own ART (ui/PluginArt.inc) is drawn in a theme of its own — an
+// illustration in its background, its own palette, materials and knobs, evoking the mood of the plugin it is
+// inspired by (Sakura's cherry blossoms, Toxic Biohazard's containment lab...). All of it is LYNX's own procedural
+// vector drawing. A plugin without art falls back to its automatic style.
+enum class Style { glow = 0, neon, hardware, vivid, themed };
+inline constexpr int styleCount = 5;
+
+// the per-plugin art of the Themed style (none: the plugin has no theme of its own)
+enum class Art // ids: generators 1..127 (ui/PluginArtGeneratorIds.inc), effects 128..255 (ui/PluginArtEffectIds.inc)
+{
+    none = 0,
+   #define LYNX_ART(id, value) id = value,
+   #include "ui/PluginArtGeneratorIds.inc"
+   #include "ui/PluginArtEffectIds.inc"
+   #undef LYNX_ART
+};
+Art art();                                 // the art the kit draws with right now (Style::themed only)
+Art artForEffect (EffectKind);
+Art artForInstrument (InstrumentKind);
+Style baseStyleOf (Art);                   // the style the art builds on for what it does not draw itself
+juce::Colour artAccent (Art);              // the art's main accent (editors use it for their own drawing)
+juce::Colour artAccent2 (Art);             // its second light
+const char* artName (Art);                 // "Sakura"... (tests, snapshots)
+// animated art (falling petals, glows): Settings > General; also off with Reduced effects or the OS's
+// "show animations" switched off
+bool artMotion();
+void setArtMotion (bool);
+bool osReducedMotion();
+void kickArtLayers(); // the open editors' art layers re-check whether they may move (after a settings change)
+juce::String artSelfTest(); // "OK" or what failed: style resolution with art, every art drawn (LYNX --selftest)
 // the style the kit draws in right now (editors set it for their paint with StyleScope)
 Style style();
 void setStyle (Style);
@@ -126,8 +181,10 @@ int forcedStyle();
 void setForcedStyle (int styleOrMinusOne);
 int styleKey (EffectKind, bool soundgoodizer = false); // the key of an editor in the override table
 Style defaultStyleFor (int key);                        // the built-in table
+Style plainStyleFor (int key);                          // ... as it is without the plugin's own art (Themed)
 Style styleFor (EffectKind, bool soundgoodizer = false); // forced > override > table
 Style resolve (Style automatic);                        // forced, or `automatic`
+Style resolve (Style automatic, Art);                   // the same for a page with (or without) art: Themed needs art
 int overrideFor (int key);                              // −1: none
 void setOverride (int key, int styleOrMinusOne);
 juce::String overridesToString();
@@ -136,15 +193,61 @@ inline std::function<void()> onStyleSettingsChanged; // the main window saves it
 // adds "Plugin style" (Automatic / Glow / Neon / Hardware / Vivid) for one editor to a menu; `changed` repaints it
 void addStyleMenu (juce::PopupMenu&, int key, std::function<void()> changed);
 inline constexpr const char* styleProperty = "lynxSkinStyle"; // a generator page's knob: its page's automatic style
+// the styleProperty value: the automatic style and the page's art in one int
+inline int packStyle (Style s, Art a) { return (int) s | ((int) a << 8); }
+inline Style unpackStyle (int packed) { return (Style) juce::jlimit (0, styleCount - 1, packed & 0xff); }
+inline Art unpackArt (int packed) { return (Art) ((packed >> 8) & 0xff); }
+void setArt (Art);
 
-// draws with a style until the end of the scope
+// draws with a style (and, for Themed, an art) until the end of the scope; Themed without art draws Glow
 struct StyleScope
 {
-    explicit StyleScope (Style s) : saved (style()) { setStyle (s); }
-    ~StyleScope() { setStyle (saved); }
+    explicit StyleScope (Style s, Art a = Art::none) : saved (style()), savedArt (art())
+    {
+        setArt (a);
+        setStyle (s == Style::themed && a == Art::none ? Style::glow : s);
+    }
+    ~StyleScope()
+    {
+        setStyle (saved);
+        setArt (savedArt);
+    }
     StyleScope (const StyleScope&) = delete;
     StyleScope& operator= (const StyleScope&) = delete;
     Style saved;
+    Art savedArt;
+};
+
+// The animated part of an editor's art (falling petals, a pulsing glow, twinkling stars...), a transparent layer
+// over the editor that takes no mouse clicks. It repaints only the small areas that move, at ≤ 30 Hz, and only
+// while the editor is on screen, the style is Themed and artMotion() is on; otherwise it shows a still frame.
+class ArtLayer final : public juce::Component, private juce::Timer
+{
+public:
+    ArtLayer();
+    ~ArtLayer() override;
+    // `active` tells whether the editor draws in the Themed style right now (Settings can change it at any time)
+    void setArt (Art, std::function<bool()> active);
+    // where the art may move (the editor's free areas; empty: everywhere)
+    void setStage (juce::Rectangle<float>);
+    void paint (juce::Graphics&) override;
+    void visibilityChanged() override { kick(); }
+    void parentHierarchyChanged() override { kick(); }
+    void resized() override;
+    void kick();                 // restart the motion if it may run
+    bool animating() const { return isTimerRunning(); }
+    double phase() const { return t; }
+    void setPhase (double seconds); // a still frame at this time (snapshots)
+
+private:
+    void timerCallback() override;
+    bool showing() const;
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+    Art artId = Art::none;
+    std::function<bool()> isActive;
+    juce::Rectangle<float> stage;
+    double t = 0.0, lastMs = 0.0;
 };
 
 // --- effects level (round 126) --------------------------------------------------------------------
@@ -155,8 +258,27 @@ void setReducedEffects (bool);
 void playOpenAnimation (juce::Component& content, Style = Style::glow);
 
 // --- typography ----------------------------------------------------------------------------------
-inline juce::Colour captionColour() { return juce::Colour (0xff8c919c); }
-inline juce::Colour valueColour (bool hot) { return hot ? theme::colour::textPrimary : juce::Colour (0xffd3d6dd); }
+// round tp172d: a themed editor may set its own caption / value colours and type size (artkit::Theme)
+juce::Colour captionColour();
+juce::Colour valueColour (bool hot);
+float captionScale();
+bool lowerCaptions(); // round tp172d: the theme writes captions and plain menus in lower case
+bool ledReadouts();   // round tp172d: read-outs and stepped menus as red LED displays
+bool titleRules();    // round tp172d: the big name label between two rules
+bool vuBezel();       // round tp172d: a chrome bezel round the VU
+bool vuBezelDark();   // round tp172d (slice 8): ... in dark gunmetal instead (an opto leveler's meter frame)
+// round tp172d (slice 8): the opto leveler's hardware — gold keys on its charcoal strip, a metal bat toggle on its hex
+// nut (up or down), a black pointer knob (a selector) turned to `angle` (radians, 0 = up)
+bool goldKeys();
+void goldKey (juce::Graphics&, juce::Rectangle<float> area, bool lit, bool hover);
+void batToggle (juce::Graphics&, juce::Rectangle<float> area, bool up, bool hover, bool enabled);
+void selectorKnob (juce::Graphics&, juce::Rectangle<float> area, float angle, bool hover, bool enabled);
+// round tp172d: the hardware themes' square keys (option tabs, switches) and the section being drawn (its own fill)
+bool hwKeys();
+void hwKey (juce::Graphics&, juce::Rectangle<float> area, bool lit, bool hover, juce::Colour litColour = {}); // (litColour: the accent when transparent)
+void setSectionOrdinal (int ordinal); // -1 = none
+void setOnDarkFill (bool dark);      // the next items sit on a dark section fill: light legends
+bool sectionFillIsDark (int ordinal); // the theme fills that top-level section dark
 
 // --- animation -----------------------------------------------------------------------------------
 // Smooth hover / press levels per control id, advanced by a 60 Hz timer that runs ONLY while something is

@@ -55,6 +55,8 @@ std::vector<float> toxicWaveShape (const std::vector<std::uint8_t>& state, const
 // effect fields P[227…293] (0…1), and the raw-integer settings P[295…315] (LFO sync, filter mode, polyphony, unison,
 // glide mode, delay sync, waves, effect types) with their ranges
 const std::vector<EngineParam>& toxicParams();
+// a modulation slot's source: 0 none, 1 velocity, 2/3 LFO 1/2, 4 aftertouch, 5 pitch wheel, 7…134 MIDI CC 0…127
+std::string toxicModSourceName (int source);
 
 std::unique_ptr<Instrument> makeToxicInstrument();
 

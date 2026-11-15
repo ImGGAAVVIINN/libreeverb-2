@@ -3,6 +3,7 @@
 #include "core/WindowFit.h"
 
 #include "ui/LogoData.h"
+#include "ui/ImageCaches.h"
 #include "ui/Theme.h"
 #include "platform/Paths.h"
 
@@ -160,7 +161,49 @@ void removeDialogTextFocus()
 
 juce::Image logoImage()
 {
-    return juce::ImageCache::getFromMemory (logo::png256, (int) sizeof (logo::png256));
+    return juce::ImageCache::getFromMemory (logo::png512, (int) sizeof (logo::png512));
+}
+
+juce::Image logoSmallImage()
+{
+    return juce::ImageCache::getFromMemory (logo::pngSmall, (int) sizeof (logo::pngSmall));
+}
+
+juce::Image logoTinyImage()
+{
+    return juce::ImageCache::getFromMemory (logo::pngTiny, (int) sizeof (logo::pngTiny));
+}
+
+juce::Image logoMarkImage()
+{
+    return juce::ImageCache::getFromMemory (logo::markPng512, (int) sizeof (logo::markPng512));
+}
+
+juce::Image logoMarkSmallImage()
+{
+    return juce::ImageCache::getFromMemory (logo::markSmall, (int) sizeof (logo::markSmall));
+}
+
+LogoDisc logoDisc()
+{
+    return { logo::discX, logo::discY, logo::discR };
+}
+
+juce::Image logoAt (int px)
+{
+    px = juce::jlimit (8, 512, px);
+    static std::map<int, juce::Image> cache;
+    static const bool registered = lynx::ui::registerImageCache ([] { cache.clear(); }); (void) registered;
+    auto& img = cache[px];
+    if (img.isNull())
+    {
+        img = px <= 20 ? logoTinyImage() : px <= 32 ? logoSmallImage() : logoImage();
+        while (img.getWidth() / 2 >= px)
+            img = img.rescaled (img.getWidth() / 2, img.getHeight() / 2, juce::Graphics::highResamplingQuality);
+        if (img.getWidth() != px)
+            img = img.rescaled (px, px, juce::Graphics::highResamplingQuality);
+    }
+    return img;
 }
 
 void applyWindowChrome (juce::Component& window)
@@ -704,6 +747,19 @@ void matchWindowOrderToScreen()
 
     for (auto* c : above)
         c->toFront (false);
+}
+
+void markLinkedWindow (juce::Component& window, int channel, int insert)
+{
+    window.getProperties().set ("lynxLinkChannel", channel);
+    window.getProperties().set ("lynxLinkInsert", insert);
+}
+
+bool dockOrKeepAbove (juce::DocumentWindow& window)
+{
+    // standalone: no editor dock workspace, so the latest dock path is unavailable; keep the window above the main window
+    keepAboveMainWindow (window);
+    return false;
 }
 
 } // namespace lynx

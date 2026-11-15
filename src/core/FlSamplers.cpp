@@ -92,6 +92,13 @@ std::string utf16 (const Chunk& c)
     return out;
 }
 
+// FPC's strings as the importer always read them: up to a NUL
+std::string fpcText (std::u16string s)
+{
+    s.erase (std::find (s.begin(), s.end(), u'\0'), s.end());
+    return fpc::toUtf8 (s);
+}
+
 double l11 (double x) // (11^x − 1)/10: FL's volume curves
 {
     return (std::pow (11.0, std::clamp (x, 0.0, 2.0)) - 1.0) / 10.0;
@@ -170,6 +177,28 @@ std::optional<std::vector<DrumPad>> fpcPads (const std::vector<std::uint8_t>& d)
         return std::nullopt;
 
     return pads;
+}
+
+std::vector<std::string> fpcLayerPaths (const fpc::Kit& kit)
+{
+    std::vector<std::string> paths;
+    for (const auto& pad : kit.pads)
+        for (const auto& layer : pad.layers)
+            if (auto path = fpcText (layer.path); ! path.empty())
+                paths.push_back (std::move (path));
+    return paths;
+}
+
+void setFpcKit (ChannelDef& channel, const fpc::Kit& kit, const std::function<std::string (const std::string&)>& locate)
+{
+    channel.pluginState = fpc::write (kit);
+    channel.zones.clear();
+    for (const auto& path : fpcLayerPaths (kit))
+    {
+        SampleZone zone;
+        zone.path = locate ? locate (path) : path;
+        channel.zones.push_back (std::move (zone));
+    }
 }
 
 std::optional<DirectWaveProgram> directWaveProgram (const std::vector<std::uint8_t>& d)
@@ -377,7 +406,7 @@ std::optional<SlicedSample> fruitySlicer (const std::vector<std::uint8_t>& d)
     return result;
 }
 
-std::optional<SlicedSample> slicex (const std::vector<std::uint8_t>& d)
+std::optional<SlicedSample> slicexSample (const std::vector<std::uint8_t>& d)
 {
     Stream in { d };
     const auto version = in.read<std::uint32_t>();

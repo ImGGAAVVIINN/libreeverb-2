@@ -3266,6 +3266,14 @@ std::string vocalParamText (int param, float v)
         default: return onOff (v);
     }
 }
+int driveModelIndex (float v) noexcept { return std::clamp ((int) std::lround (v * (float) (driveModels - 1)), 0, (int) driveModels - 1); }
+float driveModelValue (int model) noexcept { return (float) std::clamp (model, 0, (int) driveModels - 1) / (float) (driveModels - 1); }
+const char* driveModelName (int model) noexcept
+{
+    static const char* names[driveModels] { "Saturate", "Console E", "Console G", "Console A", "Console N", "Console Y", "Tube",
+                                            "Guitar amp", "Bass amp" };
+    return names[std::clamp (model, 0, (int) driveModels - 1)];
+}
 } // namespace ridge
 
 std::string paramText (EffectKind kind, int param, float v)

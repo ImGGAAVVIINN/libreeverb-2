@@ -1,10 +1,18 @@
 #include "ui/PluginSkin.h"
+#include "ui/ImageCaches.h"
 
+#include "core/Effects.h"
 #include "ui/I18n.h"
 #include "ui/WindowOwner.h"
 
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
+
+#if JUCE_WINDOWS
+extern "C" __declspec (dllimport) int __stdcall SystemParametersInfoW (unsigned int, unsigned int, void*, unsigned int);
+static int lynxSystemParametersInfoW (unsigned int a, unsigned int b, void* c, unsigned int d) { return SystemParametersInfoW (a, b, c, d); }
+#endif
 
 namespace lynx::skin
 {
@@ -80,11 +88,16 @@ namespace
 {
 bool reduced = false;
 Style currentStyle = Style::glow;
+Art currentArt = Art::none;
+bool motion = true;
 
 // a deterministic grain tile (white and black specks at a few % alpha) laid over the canvases
 const juce::Image& grainTile()
 {
-    static juce::Image tile = [] {
+    static juce::Image tile;
+    static const bool registered = lynx::ui::registerImageCache ([] { tile = {}; }); (void) registered;
+    if (tile.isNull())
+        tile = [] {
         juce::Image img (juce::Image::ARGB, 128, 128, true);
         juce::Random rnd (126);
         juce::Image::BitmapData px (img, juce::Image::BitmapData::writeOnly);
@@ -97,7 +110,7 @@ const juce::Image& grainTile()
                 px.setPixelColour (x, y, (light ? juce::Colours::white : juce::Colours::black).withAlpha (a));
             }
         return img;
-    }();
+        }();
     return tile;
 }
 
@@ -118,8 +131,10 @@ void cachedLayer (juce::Graphics& g, juce::Rectangle<float> a, juce::Colour acce
     key = key * 16411u + (std::uint64_t) h;
     key = key * 31u + (std::uint64_t) style * 2u + (reduced ? 1u : 0u);
     key = key * 7u + (std::uint64_t) currentStyle;
+    key = key * 11u + (std::uint64_t) currentArt;
     key ^= (std::uint64_t) accent.getARGB() * 0x9e3779b97f4a7c15ull;
     static std::map<std::uint64_t, juce::Image> cache;
+    static const bool registered = lynx::ui::registerImageCache ([] { cache.clear(); }); (void) registered;
     auto it = cache.find (key);
     if (it == cache.end())
     {
@@ -129,6 +144,22 @@ void cachedLayer (juce::Graphics& g, juce::Rectangle<float> a, juce::Colour acce
             juce::Graphics ig (img);
             ig.addTransform (juce::AffineTransform::scale ((float) w / a.getWidth(), (float) h / a.getHeight()));
             draw (ig, { 0.0f, 0.0f, a.getWidth(), a.getHeight() }, accent);
+        }
+        // Both layers (canvas, backdrop) are an editor's opaque base: every canvas starts with an opaque fill. Quartz's
+        // 8-bit source-over rounds the alpha of an opaque pixel under a faint translucent blit (a bloom sprite) down to
+        // 254, so on macOS the base came out a hair see-through (CI selftest plugin_art). Snap such pixels back to opaque
+        // (premultiplied data: the colour stays valid); real translucency is far below this threshold.
+        {
+            juce::Image::BitmapData px (img, juce::Image::BitmapData::readWrite);
+            for (int y = 0; y < px.height; ++y)
+            {
+                auto* row = px.getLinePointer (y);
+                for (int x = 0; x < px.width; ++x)
+                {
+                    auto* p = reinterpret_cast<juce::PixelARGB*> (row + x * px.pixelStride);
+                    if (p->getAlpha() >= 0xfc && p->getAlpha() < 0xff) p->setAlpha (0xff);
+                }
+            }
         }
         it = cache.emplace (key, img).first;
     }
@@ -171,10 +202,22 @@ struct OpenAnimation final : private juce::Timer
 } // namespace
 
 bool reducedEffects() { return reduced; }
-void setReducedEffects (bool on) { reduced = on; }
+void setReducedEffects (bool on)
+{
+    reduced = on;
+    kickArtLayers();
+}
 
 Style style() { return currentStyle; }
 void setStyle (Style s) { currentStyle = s; }
+Art art() { return currentArt; }
+void setArt (Art a) { currentArt = a; }
+bool artMotion() { return motion; }
+void setArtMotion (bool on)
+{
+    motion = on;
+    kickArtLayers();
+}
 const char* styleName (Style s)
 {
     switch (s)
@@ -182,6 +225,7 @@ const char* styleName (Style s)
         case Style::neon: return "Neon";
         case Style::hardware: return "Hardware";
         case Style::vivid: return "Vivid";
+        case Style::themed: return "Themed";
         default: return "Glow";
     }
 }
@@ -208,10 +252,20 @@ constexpr int soundgoodizerKey = 1000;
 } // namespace
 
 int forcedStyle() { return forced; }
-void setForcedStyle (int s) { forced = s >= 0 && s < styleCount ? s : -1; }
+void setForcedStyle (int s)
+{
+    forced = s >= 0 && s < styleCount ? s : -1;
+    kickArtLayers();
+}
 int styleKey (EffectKind kind, bool soundgoodizer) { return soundgoodizer ? soundgoodizerKey : (int) kind; }
 
 Style defaultStyleFor (int key)
+{
+    if (key >= 0 && key < soundgoodizerKey && artForEffect ((EffectKind) key) != Art::none) return Style::themed; // round 170j: its own art
+    return plainStyleFor (key);
+}
+
+Style plainStyleFor (int key)
 {
     using K = EffectKind;
     constexpr auto G = Style::glow, N = Style::neon, H = Style::hardware, V = Style::vivid;
@@ -248,12 +302,25 @@ Style defaultStyleFor (int key)
 
 Style resolve (Style automatic) { return forced >= 0 ? (Style) forced : automatic; }
 
+Style resolve (Style automatic, Art a)
+{
+    const auto s = resolve (automatic);
+    if (s != Style::themed || a != Art::none) return s;
+    return automatic != Style::themed ? automatic : Style::glow; // Themed everywhere: a page without art keeps its own style
+}
+
 Style styleFor (EffectKind kind, bool soundgoodizer)
 {
-    if (forced >= 0) return (Style) forced;
     const auto key = styleKey (kind, soundgoodizer);
-    if (const auto o = overrideFor (key); o >= 0) return (Style) o;
-    return defaultStyleFor (key);
+    const auto hasArt = ! soundgoodizer && artForEffect (kind) != Art::none;
+    auto fallback = [&] (Style s) {
+        if (s != Style::themed || hasArt) return s;
+        const auto own = defaultStyleFor (key);
+        return own != Style::themed ? own : Style::glow;
+    };
+    if (forced >= 0) return fallback ((Style) forced);
+    if (const auto o = overrideFor (key); o >= 0) return fallback ((Style) o);
+    return fallback (defaultStyleFor (key));
 }
 
 int overrideFor (int key)
@@ -266,6 +333,7 @@ void setOverride (int key, int s)
 {
     if (s >= 0 && s < styleCount) overrides[key] = s;
     else overrides.erase (key);
+    kickArtLayers();
 }
 
 juce::String overridesToString()
@@ -293,8 +361,10 @@ void addStyleMenu (juce::PopupMenu& menu, int key, std::function<void()> changed
         if (changed) changed();
     };
     sub.addItem (tr ("Automatic ({0})", { tr (styleName (defaultStyleFor (key))) }), true, now < 0, [apply] { apply (-1); });
+    const auto hasArt = key >= 0 && key < soundgoodizerKey && artForEffect ((EffectKind) key) != Art::none;
     for (int i = 0; i < styleCount; ++i)
-        sub.addItem (tr (styleName ((Style) i)), true, now == i, [apply, i] { apply (i); });
+        if ((Style) i != Style::themed || hasArt)
+            sub.addItem (tr (styleName ((Style) i)), true, now == i, [apply, i] { apply (i); });
     if (forced >= 0)
     {
         sub.addSeparator();
@@ -310,6 +380,7 @@ void bloom (juce::Graphics& g, juce::Point<float> c, float radius, juce::Colour 
     const auto level = juce::jlimit (1, 64, (int) std::lround (alpha * 64.0f));
     const auto key = (std::uint64_t) colour.withAlpha ((juce::uint8) 255).getARGB() * 67u + (std::uint64_t) level;
     static std::unordered_map<std::uint64_t, juce::Image> sprites;
+    static const bool registered = lynx::ui::registerImageCache ([] { sprites.clear(); }); (void) registered;
     auto it = sprites.find (key);
     if (it == sprites.end())
     {
@@ -331,6 +402,7 @@ void bloom (juce::Graphics& g, juce::Point<float> c, float radius, juce::Colour 
 }
 
 #include "ui/PluginStyles.inc"
+#include "ui/PluginArt.inc"
 
 // --- surfaces ------------------------------------------------------------------------------------
 
@@ -338,6 +410,7 @@ namespace
 {
 void drawCanvas (juce::Graphics& g, juce::Rectangle<float> a, juce::Colour accent, bool display)
 {
+    if (currentStyle == Style::themed) { artkit::canvas (g, a, accent, display); return; }
     if (currentStyle != Style::glow) { styles::canvas (g, a, accent, display, currentStyle); return; }
     // the deep base
     g.setGradientFill (juce::ColourGradient (display ? juce::Colour (0xff14161c) : juce::Colour (0xff1c1e26), 0.0f, a.getY(),
@@ -385,6 +458,8 @@ void backdrop (juce::Graphics& g, juce::Rectangle<float> a, juce::Colour accent)
 
 void headerBar (juce::Graphics& g, juce::Rectangle<float> a, juce::Colour accent)
 {
+    if (currentStyle == Style::themed && artkit::headerBar (g, a, accent)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::headerBar (g, a, accent, currentStyle); return; }
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c2f39), 0.0f, a.getY(), juce::Colour (0xff15171c), 0.0f, a.getBottom(), false));
     g.fillRect (a);
@@ -425,31 +500,157 @@ void brandMark (juce::Graphics& g, juce::Rectangle<float> a)
 {
     const auto d = juce::jmin (a.getWidth(), a.getHeight());
     if (d < 6.0f) return;
-    // the logo resampled once per size (×2 for high-DPI)
+    const auto c = a.getCentre();
+    const auto scale = pixelScale (g);
+    // a picture resampled once per size (x2 for high-DPI), halving step by step: one big jump from 512 px aliases at
+    // the 16-24 px header size
     static std::map<int, juce::Image> cache;
-    const auto px = juce::jlimit (8, 128, (int) std::ceil (d * 2.0f));
-    auto& img = cache[px];
-    if (img.isNull())
+    static const bool registered = lynx::ui::registerImageCache ([] { cache.clear(); }); (void) registered;
+    auto scaled = [] (juce::Image img, int px)
     {
-        const auto logo = logoImage();
-        if (logo.isNull()) return;
-        img = logo.rescaled (px, px, juce::Graphics::highResamplingQuality);
-    }
-    const auto r = a.withSizeKeepingCentre (d, d);
-    bloom (g, r.getCentre(), d * 1.05f, colour::crimson, 0.55f);
+        while (px > 0 && img.getWidth() / 2 >= px)
+            img = img.rescaled (img.getWidth() / 2, img.getHeight() / 2, juce::Graphics::highResamplingQuality);
+        if (img.getWidth() != px)
+            img = img.rescaled (px, px, juce::Graphics::highResamplingQuality);
+        return img;
+    };
+    // The mark by w3teal (the lynx in the red ring with the pepper stem) without the app icon's tile, which would
+    // shrink the lynx to half the button (round 190eq): its ring fills the button's circle
+    // (d + 3, over the place of the old dark edge and ring) and its ears rise above it, as far as the area's top; a
+    // dark disc under it (1 px wider) so the cut-outs read the same on every skin. Up to 32 physical pixels across
+    // (the 1x header buttons) the mark's small-size form (thicker lines and ring).
+    const auto disc = logoDisc();
+    // (smaller where the ears would rise above the area: a header's top edge)
+    const auto side = juce::jmin ((d + 3.0f) / (2.0f * disc.r), (c.y - a.getY()) / disc.y);
+    const auto circle = side * 2.0f * disc.r;
+    const bool small = side * scale <= 32.0f;
+    const auto px = juce::jlimit (8, 160, (int) std::ceil (side * juce::jmax (2.0f, scale)));
+    auto& img = cache[small ? -px : px];
+    if (img.isNull())
+        img = scaled (small ? logoMarkSmallImage() : logoMarkImage(), px);
+    if (img.isNull()) return;
+    bloom (g, c, d * 1.05f, colour::crimson, 0.55f);
     g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.fillEllipse (r.expanded (1.5f).translated (0.0f, 0.8f));
-    g.setColour (colour::crimson.withAlpha (0.55f));
-    g.drawEllipse (r.expanded (1.2f), 1.0f);
+    g.fillEllipse (juce::Rectangle<float> (circle + 2.0f, circle + 2.0f).withCentre (c).translated (0.0f, 0.8f));
+    g.setColour (juce::Colour (0xff0e0f13));
+    g.fillEllipse (juce::Rectangle<float> (circle + 2.0f, circle + 2.0f).withCentre (c));
     g.setOpacity (1.0f);
-    g.drawImage (img, r, juce::RectanglePlacement::centred);
+    g.drawImage (img, juce::Rectangle<float> (c.x - disc.x * side, c.y - disc.y * side, side, side), juce::RectanglePlacement::stretchToFit);
+}
+
+namespace
+{
+TitleFit lastFit;
+
+// round 170k2: how each style sets a plugin's name (its size for a box this high, kerning, capitals, padding)
+struct TitleLook
+{
+    float nominal, kerning, pad;
+    bool upper;
+};
+TitleLook titleLook (Style s, float h)
+{
+    switch (s)
+    {
+        case Style::neon: return { juce::jlimit (14.0f, 21.0f, h * 0.74f), 0.06f, 4.0f, false };
+        case Style::hardware: return { juce::jlimit (12.0f, 16.0f, h * 0.56f), 0.08f, 16.0f, true };
+        case Style::vivid: return { juce::jlimit (14.0f, 20.0f, h * 0.72f), 0.03f, 3.5f, true };
+        default: return { juce::jlimit (13.0f, 18.0f, h * 0.62f), 0.02f, 2.0f, false };
+    }
+}
+float titleWidth (const TitleLook& look, const juce::String& name, float size)
+{
+    const auto f = juce::Font (theme::font (size, true)).withExtraKerningFactor (look.kerning);
+    return juce::GlyphArrangement::getStringWidth (f, look.upper ? name.toUpperCase() : name) + look.pad;
+}
+// the largest size from the style's own down to minSize at which the name fits `w`; 0 when even minSize does not
+float fittingSize (const TitleLook& look, const juce::String& name, float w, float minSize)
+{
+    for (auto size = look.nominal; size >= minSize - 0.01f; size -= 0.5f)
+        if (titleWidth (look, name, size) <= w - 1.0f) // (a pixel of slack: drawText rounds its own way)
+            return size;
+    return 0.0f;
+}
+constexpr float titleMinSize = 10.0f; // smaller than this a header name stops reading as a title
+
+float drawTitleLine (juce::Graphics& g, juce::Rectangle<float> a, const juce::String& name, juce::Colour accent, bool underline, float size);
+} // namespace
+
+TitleFit lastTitleFit() { return lastFit; }
+void resetTitleFit() { lastFit = {}; }
+
+// the prefix that may go to a small line above the name when the full name does not fit on one ("Fruity Blood
+// Overdrive": "Fruity" over "Blood Overdrive")
+static int titlePrefixLength (const juce::String& name)
+{
+    for (const auto* p : { "Fruity " })
+        if (name.startsWithIgnoreCase (p) && name.length() > (int) std::strlen (p) + 2)
+            return (int) std::strlen (p);
+    return 0;
+}
+
+float titleMinWidth (const juce::String& name, float height)
+{
+    // the widest any style needs (a window's minimum size does not change with the style)
+    auto most = 0.0f;
+    for (const auto st : { Style::glow, Style::neon, Style::hardware, Style::vivid })
+    {
+        if (const auto n = titlePrefixLength (name); n > 0 && height >= 20.0f)
+        {
+            const auto low = titleLook (st, height * 0.7f);
+            most = juce::jmax (most, titleWidth (low, name.substring (n), titleMinSize));
+        }
+        else
+            most = juce::jmax (most, titleWidth (titleLook (st, height), name, titleMinSize));
+    }
+    return std::ceil (most) + 2.0f;
 }
 
 float titleText (juce::Graphics& g, juce::Rectangle<float> a, const juce::String& name, juce::Colour accent, bool underline)
 {
-    if (currentStyle != Style::glow) return styles::titleText (g, a, name, accent, underline, currentStyle);
+    const BaseScope base;
+    const auto look = titleLook (currentStyle, a.getHeight());
+    lastFit = { titleWidth (look, name, look.nominal), a.getWidth(), look.nominal, 1, false };
+    // 1. one line, the style's size or a little smaller
+    if (const auto size = fittingSize (look, name, a.getWidth(), juce::jmax (titleMinSize, look.nominal * 0.75f)); size > 0.0f)
+    {
+        lastFit.size = size;
+        return drawTitleLine (g, a, name, accent, underline, size);
+    }
+    // 2. a known prefix ("Fruity") on a small line above, the rest of the name below it
+    if (const auto n = titlePrefixLength (name); n > 0 && a.getHeight() >= 20.0f)
+    {
+        const auto rest = name.substring (n);
+        const auto top = a.withHeight (a.getHeight() * 0.36f).translated (0.0f, 1.0f);
+        const auto low = a.withTrimmedTop (a.getHeight() * 0.36f);
+        const auto lowLook = titleLook (currentStyle, low.getHeight());
+        if (const auto size = fittingSize (lowLook, rest, low.getWidth(), titleMinSize); size > 0.0f)
+        {
+            const auto prefix = name.substring (0, n).trim();
+            const auto prefixSize = juce::jmax (8.0f, top.getHeight() * 0.95f);
+            g.setFont (juce::Font (theme::font (prefixSize, true)).withExtraKerningFactor (0.12f));
+            const auto prefixWidth = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), prefix.toUpperCase()) + 4.0f;
+            g.setColour (juce::Colours::white.withAlpha (0.62f));
+            g.drawText (prefix.toUpperCase(), top.withTrimmedLeft (lowLook.pad > 8.0f ? 4.0f : 1.0f), juce::Justification::centredLeft, false);
+            lastFit.size = size;
+            lastFit.lines = 2;
+            const auto w = drawTitleLine (g, low, rest, accent, false, size);
+            return juce::jmax (w, prefixWidth);
+        }
+    }
+    // 3. one line at the smallest title size (ellipsis only when even that does not fit)
+    const auto size = juce::jmax (titleMinSize, fittingSize (look, name, a.getWidth(), titleMinSize));
+    lastFit.size = size;
+    lastFit.clipped = titleWidth (look, name, size) > a.getWidth() + 0.5f;
+    return drawTitleLine (g, a, name, accent, underline, size);
+}
+
+namespace
+{
+float drawTitleLine (juce::Graphics& g, juce::Rectangle<float> a, const juce::String& name, juce::Colour accent, bool underline, float size)
+{
+    if (currentStyle != Style::glow) return styles::titleText (g, a, name, accent, underline, currentStyle, size);
     // the name plate: big and bold, lit from behind in the accent
-    const auto size = juce::jlimit (13.0f, 18.0f, a.getHeight() * 0.62f);
     g.setFont (juce::Font (theme::font (size, true)).withExtraKerningFactor (0.02f));
     const auto w = juce::jmin (a.getWidth(), juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), name) + 2.0f);
     const auto box = a.withWidth (w);
@@ -464,7 +665,7 @@ float titleText (juce::Graphics& g, juce::Rectangle<float> a, const juce::String
     g.drawText (name, box.translated (0.0f, 1.0f), juce::Justification::centredLeft, true);
     g.setGradientFill (juce::ColourGradient (juce::Colours::white, 0.0f, a.getCentreY() - size * 0.5f, juce::Colour (0xffd6d9e0).interpolatedWith (accent, 0.18f), 0.0f,
                                              a.getCentreY() + size * 0.5f, false));
-    g.drawText (name, box, juce::Justification::centredLeft, true);
+    drawFilledText (g, name, box, juce::Justification::centredLeft); // (not drawText: see drawFilledText)
     if (underline)
     {
         const auto line = juce::Rectangle<float> (a.getX(), a.getBottom() - 3.0f, w, 2.0f);
@@ -478,9 +679,62 @@ float titleText (juce::Graphics& g, juce::Rectangle<float> a, const juce::String
     }
     return w;
 }
+} // namespace
+
+void drawFilledText (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification justification)
+{
+    if (text.isEmpty() || area.isEmpty()) return;
+    juce::GlyphArrangement glyphs;
+    glyphs.addCurtailedLineOfText (g.getCurrentFont(), text, 0.0f, 0.0f, area.getWidth(), true);
+    glyphs.justifyGlyphs (0, glyphs.getNumGlyphs(), area.getX(), area.getY(), area.getWidth(), area.getHeight(), justification);
+    juce::Path outline;
+    for (int i = 0; i < glyphs.getNumGlyphs(); ++i)
+    {
+        auto& glyph = glyphs.getGlyph (i);
+        if (glyph.isWhitespace()) continue;
+        juce::Path one;
+        glyph.createPath (one);
+        if (! one.isEmpty()) outline.addPath (one);
+    }
+    if (! outline.isEmpty()) g.fillPath (outline);
+}
+
+juce::String rendererProbeReport()
+{
+    // what a filled shape changed outside its own box, on this platform's native image type (CoreGraphics on macOS)
+    const auto changedOutside = [] (const std::function<void (juce::Graphics&)>& draw, juce::Rectangle<int> inside) {
+        juce::Image img (juce::Image::ARGB, 240, 80, true);
+        {
+            juce::Graphics g (img);
+            g.fillAll (juce::Colours::black);
+            draw (g);
+        }
+        int changed = 0;
+        for (int y = 0; y < img.getHeight(); ++y)
+            for (int x = 0; x < img.getWidth(); ++x)
+                if (! inside.contains (x, y) && img.getPixelAt (x, y).getBrightness() > 0.05f) ++changed;
+        return changed;
+    };
+    const auto gradient = [] (juce::Graphics& g) {
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white, 0.0f, 20.0f, juce::Colour (0xffd6c0c8), 0.0f, 40.0f, false));
+        g.setFont (theme::font (16.0f, true));
+    };
+    const juce::Rectangle<int> box (20, 20, 120, 24);
+    const auto rawText = changedOutside ([&] (juce::Graphics& g) { gradient (g); g.drawText ("Facet EQ", box.toFloat(), juce::Justification::centredLeft, true); }, box);
+    const auto safeText = changedOutside ([&] (juce::Graphics& g) { gradient (g); drawFilledText (g, "Facet EQ", box.toFloat(), juce::Justification::centredLeft); }, box);
+    const auto emptyPath = changedOutside ([&] (juce::Graphics& g) { gradient (g); g.fillPath (juce::Path()); }, {});
+    juce::String r;
+    r << "renderer probe (pixels changed outside the shape; 0 = right)\n";
+    r << "gradient drawText \"Facet EQ\": " << rawText << "\n";
+    r << "gradient drawFilledText \"Facet EQ\": " << safeText << "\n";
+    r << "gradient fillPath (empty path): " << emptyPath << "\n";
+    r << "result=" << (safeText == 0 ? "OK" : "FAIL") << "\n";
+    return r;
+}
 
 void powerLed (juce::Graphics& g, juce::Point<float> c, float d, bool on)
 {
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::powerLed (g, c, d, on, currentStyle); return; }
     const auto r = juce::Rectangle<float> (d, d).withCentre (c);
     if (on) bloom (g, c, d * 1.9f, theme::colour::ledOn, 0.55f);
@@ -495,6 +749,8 @@ void powerLed (juce::Graphics& g, juce::Point<float> c, float d, bool on)
 
 void section (juce::Graphics& g, juce::Rectangle<float> a, float corner, bool raised, juce::Colour tint)
 {
+    if (currentStyle == Style::themed && artkit::section (g, a, corner, raised, tint)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::section (g, a, corner, raised, tint, currentStyle); return; }
     // glass with real depth: a soft shadow under it, a translucent body (the aurora shows through), a sheen on the
     // upper part, the rim catching light along the top and a dark lip at the bottom
@@ -529,6 +785,8 @@ void section (juce::Graphics& g, juce::Rectangle<float> a, float corner, bool ra
 
 void sectionTitle (juce::Graphics& g, juce::Rectangle<float> strip, const juce::String& text, juce::Colour accent, float fontSize)
 {
+    if (currentStyle == Style::themed && artkit::sectionTitle (g, strip, text, accent, fontSize)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::sectionTitle (g, strip, text, accent, fontSize, currentStyle); return; }
     g.setFont (juce::Font (theme::font (fontSize, true)).withExtraKerningFactor (0.1f));
     const auto w = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text);
@@ -558,6 +816,8 @@ void sectionTitle (juce::Graphics& g, juce::Rectangle<float> strip, const juce::
 
 void well (juce::Graphics& g, juce::Rectangle<float> a, float corner, juce::Colour glow)
 {
+    if (currentStyle == Style::themed && artkit::well (g, a, corner, glow)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::well (g, a, corner, glow, currentStyle); return; }
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff050608), 0.0f, a.getY(), juce::Colour (0xff0f1015), 0.0f, a.getBottom(), false));
     g.fillRoundedRectangle (a, corner);
@@ -591,6 +851,8 @@ void well (juce::Graphics& g, juce::Rectangle<float> a, float corner, juce::Colo
 
 void floatingPanel (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour edge, float corner)
 {
+    if (currentStyle == Style::themed && artkit::floatingPanel (g, r, edge, corner)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::floatingPanel (g, r, edge, corner, currentStyle); return; }
     juce::DropShadow (juce::Colours::black.withAlpha (0.7f), 24, { 0, 8 }).drawForRectangle (g, r.toNearestInt());
     if (! reduced)
@@ -614,6 +876,7 @@ void floatingPanel (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour ed
 
 void bottomBar (juce::Graphics& g, juce::Rectangle<float> a)
 {
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::bottomBar (g, a, currentStyle); return; }
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1f2128), 0.0f, a.getY(), juce::Colour (0xff111216), 0.0f, a.getBottom(), false));
     g.fillRect (a);
@@ -633,10 +896,22 @@ void drawKnobDirect (juce::Graphics& g, juce::Rectangle<float> bounds, const Kno
 // Knobs are drawn once per look into a small cached image (value to 1/1000, hover in 8 steps, the screen's pixel
 // scale) and blitted afterwards: a display editor repainting at 30 Hz re-uses its unchanged knobs for free. The
 // bloom a big knob casts on the panel (brighter as it is turned up) is one gradient, drawn live.
+juce::Colour capTintFor (const char* param)
+{
+    return currentStyle == Style::themed && param != nullptr ? artkit::capTintFor (param) : juce::Colour();
+}
+
+juce::Colour offLabelColour()
+{
+    if (currentStyle == Style::themed && artkit::onDarkFill) return juce::Colour (0xffd0d3d6); // round tp172d
+    return currentStyle == Style::themed ? artkit::offLabelColour() : juce::Colour();
+}
+
 void knob (juce::Graphics& g, juce::Rectangle<float> boundsIn, const KnobLook& k)
 {
     // Hardware and Vivid draw their knobs a little bigger than the cell's circle (the ring sits close to the caption)
-    const auto grow = currentStyle == Style::vivid ? styles::knobScaleVivid : currentStyle == Style::hardware ? styles::knobScaleHardware : 1.0f;
+    const auto grow = currentStyle == Style::vivid ? styles::knobScaleVivid : currentStyle == Style::hardware ? styles::knobScaleHardware
+                    : currentStyle == Style::themed ? artkit::knobScale() : 1.0f;
     const auto bounds = boundsIn.withSizeKeepingCentre (boundsIn.getWidth() * grow, boundsIn.getHeight() * grow);
     const auto size = juce::jmin (bounds.getWidth(), bounds.getHeight()) - 2.0f;
     if (size <= 4.0f) return;
@@ -656,10 +931,13 @@ void knob (juce::Graphics& g, juce::Rectangle<float> boundsIn, const KnobLook& k
     key = key * 9u + (std::uint64_t) std::lround (juce::jlimit (0.0f, 1.0f, k.hover) * 8.0f);
     key = key * 16u + (k.bipolar ? 1u : 0u) + (k.active ? 2u : 0u) + (k.enabled ? 4u : 0u) + (reduced ? 8u : 0u);
     key = key * 7u + (std::uint64_t) currentStyle;
+    key = key * 11u + (std::uint64_t) currentArt;
     key = key * 401u + (std::uint64_t) std::lround (scale * 100.0f);
     key ^= (std::uint64_t) k.accent.getARGB() * 0x9e3779b97f4a7c15ull;
+    key ^= (std::uint64_t) k.capTint.getARGB() * 0xc2b2ae3d27d4eb4full;
 
     static std::unordered_map<std::uint64_t, juce::Image> cache;
+    static const bool registered = lynx::ui::registerImageCache ([] { cache.clear(); }); (void) registered;
     auto it = cache.find (key);
     if (it == cache.end())
     {
@@ -683,6 +961,7 @@ void drawKnobDirect (juce::Graphics& g, juce::Rectangle<float> bounds, const Kno
     const auto size = juce::jmin (bounds.getWidth(), bounds.getHeight()) - 2.0f;
     if (size <= 4.0f) return;
     const auto area = bounds.withSizeKeepingCentre (size, size);
+    if (currentStyle == Style::themed) { artkit::knob (g, area, k); return; }
     if (currentStyle == Style::neon) { styles::knobNeon (g, area, k); return; }
     if (currentStyle == Style::hardware) { styles::knobHardware (g, area, k); return; }
     if (currentStyle == Style::vivid) { styles::knobVivid (g, area, k); return; }
@@ -833,6 +1112,8 @@ void drawKnobDirect (juce::Graphics& g, juce::Rectangle<float> bounds, const Kno
 void slider (juce::Graphics& g, juce::Rectangle<float> t, float value01, bool vertical, bool bipolar, juce::Colour accent, bool hot, bool enabled,
              float thumbLength, float thumbThickness)
 {
+    if (currentStyle == Style::themed && artkit::slider (g, t, value01, vertical, bipolar, accent, hot, enabled, thumbLength, thumbThickness)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow)
     {
         styles::slider (g, t, juce::jlimit (0.0f, 1.0f, value01), vertical, bipolar, accent, hot, enabled, thumbLength, thumbThickness, currentStyle);
@@ -903,6 +1184,8 @@ void slider (juce::Graphics& g, juce::Rectangle<float> t, float value01, bool ve
 
 void button (juce::Graphics& g, juce::Rectangle<float> r, bool lit, bool hover, juce::Colour accent, float corner)
 {
+    if (currentStyle == Style::themed && artkit::button (g, r, lit, hover, accent, corner)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::button (g, r, lit, hover, accent, corner, currentStyle); return; }
     if (lit)
     {
@@ -942,6 +1225,8 @@ void button (juce::Graphics& g, juce::Rectangle<float> r, bool lit, bool hover, 
 
 void switchPill (juce::Graphics& g, juce::Rectangle<float> box, bool on, juce::Colour accent, bool enabled)
 {
+    if (currentStyle == Style::themed && artkit::switchPill (g, box, on, accent, enabled)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::switchPill (g, box, on, accent, enabled, currentStyle); return; }
     const auto c = enabled ? accent : theme::colour::textSecondary;
     const auto rr = box.getHeight() * 0.5f;
@@ -972,6 +1257,8 @@ void switchPill (juce::Graphics& g, juce::Rectangle<float> box, bool on, juce::C
 
 void selector (juce::Graphics& g, juce::Rectangle<float> r, bool hover, float corner)
 {
+    if (currentStyle == Style::themed && artkit::selector (g, r, hover, corner)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::selector (g, r, hover, corner, currentStyle); return; }
     g.setColour (juce::Colours::black.withAlpha (0.45f));
     g.fillRoundedRectangle (r.translated (0.0f, 1.5f), corner);
@@ -999,6 +1286,7 @@ void segmentGaps (juce::Graphics& g, juce::Rectangle<float> r, juce::Rectangle<f
 
 void meter (juce::Graphics& g, juce::Rectangle<float> r, float level01, float peak01, bool vertical)
 {
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::meter (g, r, juce::jlimit (0.0f, 1.0f, level01), juce::jlimit (0.0f, 1.0f, peak01), vertical, currentStyle); return; }
     g.setColour (juce::Colour (0xff040506));
     g.fillRoundedRectangle (r.expanded (1.0f), 2.5f);
@@ -1050,6 +1338,7 @@ void meter (juce::Graphics& g, juce::Rectangle<float> r, float level01, float pe
 
 void meterSolid (juce::Graphics& g, juce::Rectangle<float> r, float level01, juce::Colour c, bool fromTop)
 {
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::meterSolid (g, r, juce::jlimit (0.0f, 1.0f, level01), c, fromTop, currentStyle); return; }
     g.setColour (juce::Colour (0xff040506));
     g.fillRoundedRectangle (r.expanded (1.0f), 2.5f);
@@ -1075,6 +1364,7 @@ void meterSolid (juce::Graphics& g, juce::Rectangle<float> r, float level01, juc
 
 void glowStroke (juce::Graphics& g, const juce::Path& p, juce::Colour c, float thickness, float glow)
 {
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::glowStroke (g, p, c, thickness, glow, currentStyle); return; }
     if (glow > 0.0f && ! reduced)
     {
@@ -1094,6 +1384,8 @@ void glowStroke (juce::Graphics& g, const juce::Path& p, juce::Colour c, float t
 
 void valuePlate (juce::Graphics& g, juce::Rectangle<float> r, float corner)
 {
+    if (currentStyle == Style::themed && artkit::valuePlate (g, r, corner)) return;
+    const BaseScope base;
     if (currentStyle != Style::glow) { styles::valuePlate (g, r, corner, currentStyle); return; }
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff040507), 0.0f, r.getY(), juce::Colour (0xff101116), 0.0f, r.getBottom(), false));
     g.fillRoundedRectangle (r, corner);

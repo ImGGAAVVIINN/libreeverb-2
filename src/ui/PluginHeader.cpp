@@ -5,14 +5,17 @@
 #include "core/EffectPresets.h"
 #include "core/Effects.h"
 #include "core/FlEffects.h"
+#include "core/MixerOps.h"
 #include "core/ParamHelp.h"
 #include "engine/AudioEngine.h"
+#include "engine/PluginHost.h"
 #include "engine/Text.h"
 #include "platform/Paths.h"
 #include "ui/I18n.h"
 #include "ui/PluginSkin.h"
 #include "ui/Theme.h"
 #include "ui/ValueControl.h"
+#include "ui/HintBar.h"
 
 namespace lynx::pluginheader
 {
@@ -171,7 +174,7 @@ bool PresetBar::hasLynxPresets() const
     return ! presets::factory (kind).empty() || isLynxEngine (kind);
 }
 
-juce::Rectangle<float> PresetBar::place (juce::Rectangle<float> area, bool withPresets)
+juce::Rectangle<float> PresetBar::place (juce::Rectangle<float> area, bool withPresets, float keepLeft)
 {
     presetsShown = withPresets;
     const auto h = juce::jmin (20.0f, area.getHeight() - 4.0f);
@@ -186,12 +189,15 @@ juce::Rectangle<float> PresetBar::place (juce::Rectangle<float> area, bool withP
         rNext = take (18.0f);
         rPrev = take (18.0f);
         x -= 2.0f;
-        rPreset = take (juce::jlimit (70.0f, 180.0f, area.getWidth() * 0.26f));
+        // round 170k2: the preset box gives way to the title first (never below 70 px)
+        const auto spare = area.getWidth() - keepLeft - narrowWidth (true);
+        rPreset = take (juce::jlimit (70.0f, juce::jmax (70.0f, 70.0f + spare), juce::jlimit (70.0f, 180.0f, area.getWidth() * 0.26f)));
         x -= 8.0f;
     }
     else
         rNext = rPrev = rPreset = {};
-    if (area.getWidth() >= 420.0f) // narrow windows (Quell) keep the title readable: A / B without the copy button
+    // narrow windows (Quell) keep the title readable: A / B without the copy button (round 170k2: also when the title needs its room)
+    if (area.getWidth() >= 420.0f && x - 37.0f - (18.0f + 18.0f + 8.0f + 20.0f + 20.0f + 6.0f) - area.getX() >= keepLeft)
     {
         rCopy = take (34.0f);
         x -= 3.0f;
@@ -205,6 +211,12 @@ juce::Rectangle<float> PresetBar::place (juce::Rectangle<float> area, bool withP
     rUndo = take (20.0f);
     x -= 6.0f;
     return area.withRight (juce::jmax (area.getX(), x));
+}
+
+float PresetBar::narrowWidth (bool withPresets)
+{
+    // as place() lays it out below 420 px: (next, prev, gap, preset box, gap) + B, A, gap + redo, undo, gap + margin
+    return (withPresets ? 18.0f + 18.0f + 2.0f + 70.0f + 8.0f : 0.0f) + 18.0f + 18.0f + 8.0f + 20.0f + 20.0f + 6.0f + 4.0f;
 }
 
 void PresetBar::paint (juce::Graphics& g, juce::Colour accent) const
@@ -574,4 +586,67 @@ void PresetBar::saveAs (juce::Component& owner)
         safe->repaint();
     }), true);
 }
+// --- One-click sidechain (round 177b) ------------------------------------------------------------------------------
+bool takesSidechain (AudioEngine& engine, int track, int slot)
+{
+    const auto& song = engine.getSong();
+    if (track < 0 || track >= (int) song.mixer.size() || slot < 0 || slot >= (int) song.mixer[(std::size_t) track].effects.size())
+        return false;
+    const auto kind = song.mixer[(std::size_t) track].effects[(std::size_t) slot].kind;
+    return mixerops::acceptsSidechain (kind);
+}
+
+juce::String sidechainSourceText (const Song& song, const EffectSlot& fx, bool second)
+{
+    const auto source = second ? fx.sidechain2 : fx.sidechain;
+    if (source <= 0 || source >= (int) song.mixer.size())
+        return {};
+    return juce::String (source) + " " + juce::String::fromUTF8 (song.mixer[(std::size_t) source].name.c_str());
+}
+
+void addSidechainPicker (juce::PopupMenu& menu, AudioEngine& engine, int track, int slot, bool second)
+{
+    const auto& song = engine.getSong();
+    if (track < 0 || track >= (int) song.mixer.size() || slot < 0 || slot >= (int) song.mixer[(std::size_t) track].effects.size())
+        return;
+    const auto& fx = song.mixer[(std::size_t) track].effects[(std::size_t) slot];
+    const auto current = second ? fx.sidechain2 : fx.sidechain;
+    auto pick = [&engine, track, slot, second] (int from) {
+        auto result = mixerops::SidechainPick::invalid;
+        engine.editSong ([&] (Song& s) { result = mixerops::sidechainFrom (s, track, slot, from, second); });
+        const auto& now = engine.getSong();
+        if (result == mixerops::SidechainPick::linked && from < (int) now.mixer.size())
+            ui::postHint ({ tr ("Sidechain") + ": " + juce::String (from) + " " + juce::String::fromUTF8 (now.mixer[(std::size_t) from].name.c_str())
+                                + juce::String::fromUTF8 (" \xe2\x86\x92 ") + juce::String (track) + " "
+                                + juce::String::fromUTF8 (now.mixer[(std::size_t) track].name.c_str()),
+                            tr ("The source still plays through its own outputs.") }, 4000);
+        else if (result == mixerops::SidechainPick::cycle)
+            ui::postHint ({ tr ("Sidechain"), tr ("That track is fed by this one: the link would make a loop.") }, 4000);
+    };
+    menu.addItem (tr ("None"), true, current < 0, [pick] { pick (-1); });
+    menu.addSeparator();
+    for (int t = 1; t < (int) song.mixer.size(); ++t)
+    {
+        if (t == track)
+            continue;
+        const auto loop = track != 0 && ! song.routes (t, track) && ! song.canRoute (t, track);
+        auto text = juce::String (t) + " " + juce::String::fromUTF8 (song.mixer[(std::size_t) t].name.c_str());
+        if (loop)
+            text << " (" << tr ("loop") << ")";
+        menu.addItem (text, ! loop, current == t, [pick, t] { pick (t); });
+    }
+}
+
+void showSidechainPicker (AudioEngine& engine, int track, int slot, juce::Component* target, juce::Rectangle<int> area, bool second)
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader (second ? tr ("Carrier from") : tr ("Sidechain from"));
+    addSidechainPicker (menu, engine, track, slot, second);
+    auto options = juce::PopupMenu::Options();
+    if (target != nullptr)
+        options = area.isEmpty() ? options.withTargetComponent (target)
+                                 : options.withTargetScreenArea (target->localAreaToGlobal (area));
+    menu.showMenuAsync (options);
+}
+
 } // namespace lynx::pluginheader

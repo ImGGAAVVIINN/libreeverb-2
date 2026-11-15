@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "core/FlEffects.h"
 #include "core/FlpImport.h"
 #include "core/Song.h"
 
@@ -60,6 +61,9 @@ struct FlAccess
     std::function<std::string (const std::vector<std::uint8_t>& wav, const std::string& name)> saveEmbedded; // (FL Keys' raw tables)
 };
 
+// A file of that installation by its path relative to %FLStudioFactoryData%; empty = not available
+FlDataReader flDataReader (const FlAccess& fl);
+
 // The presets a new instance may start from, in order: Default.fst in <Data>\Patches\Plugin presets\<Generators|Effects>\<folder>,
 // then the folder's other presets (the first one LYNX's engine reads exactly is used: some engines don't
 // read every version of their plugin's state); empty = FL not installed, or no preset for this plugin
@@ -93,6 +97,11 @@ std::optional<EffectSlot> makeSlot (EffectKind kind, const FlAccess& fl, double 
 // "System/Render tests/Autogun.flp", imported with its Magic Dust data (Autogun has no preset files: its patches come
 // from its own patch numbers, so it is not offered in the Add menus); nullopt without FL
 std::optional<ChannelDef> autogunShotChannel (const FlAccess& fl);
+
+// What an editor control's new value brings from the user's FL installation (round 170i3): Harmless' "Compression
+// type" menu loads that type's preset (Harmless\Data\Compression\<n>.fst) into the channel, as the importer does
+// (without it the menu and the "Compression level" knob changed nothing). Call it after modelparams::setRawValue.
+void followControl (ChannelDef& c, int index, const FlAccess& fl);
 
 // Any effect kind: the FL engines through makeSlot, the others makeEffectSlot (nullopt only for an FL engine that
 // can't be made here)

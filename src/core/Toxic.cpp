@@ -1822,6 +1822,17 @@ const std::vector<EngineParam>& toxicParams()
     return table;
 }
 
+// a modulation slot's source: 0 none, 1 velocity, 2/3 LFO 1/2, 4 aftertouch, 5 pitch wheel, 7…134 MIDI CC 0…127
+std::string toxicModSourceName (int source)
+{
+    static const char* const fixed[] = { "---", "Velocity", "LFO 1", "LFO 2", "Aftertouch", "Pitch wheel" };
+    if (source >= 0 && source < 6)
+        return fixed[source];
+    if (source >= 7 && source < 135)
+        return "CC " + std::to_string (source - 7);
+    return "---";
+}
+
 namespace toxic
 {
 std::vector<float> renderReference (const std::vector<std::uint8_t>& state, const std::vector<RefNote>& notes, double sampleRate,

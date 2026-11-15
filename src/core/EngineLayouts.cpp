@@ -657,6 +657,19 @@ Layout transistorBassLayout()
     return l;
 }
 
+// A channel imported from a .flm plays FL Studio Mobile's build of the engine (core/TransistorBass.h): no sequencer,
+// programs, delay, reverb or recorded 303 cycles. The same page without the parts that do nothing there.
+Layout transistorBassMobileLayout()
+{
+    auto l = transistorBassLayout();
+    l.height = 266;
+    std::erase_if (l.items, [] (const LayoutItem& i) {
+        return i.y >= 262.0f || (i.display != nullptr && std::string (i.display) == "tbprogram")
+               || (i.param != nullptr && std::string (i.param) == "303 pulse");
+    });
+    return l;
+}
+
 // --- BeepMap --------------------------------------------------------------------------------------------------
 // FL's panel (380 × 170): Freq and Length wheels, the Scale combo, the four switches, the bitmap's Open / Copy /
 // Paste row with Max height, the bitmap below. Values: the int32 settings (Frequency 24…9600 cents / Hz, Length

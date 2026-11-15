@@ -3053,6 +3053,7 @@ void open (AudioEngine& engine, int track, int slot)
     open[key] = std::make_unique<ProEditorWindow> (std::move (editor), title, engine, track, slot);
 }
 
+void close (int track, int slot) { windows().erase ({ track, slot }); }
 void closeAll() { windows().clear(); }
 } // namespace ProEditorWindows
 

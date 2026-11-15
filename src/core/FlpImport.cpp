@@ -1212,7 +1212,7 @@ Song importFlp (const flp::Project& input, const FlpImportOptions& options)
             if (name == "fruity slicer")
                 sliced = fruitySlicer (c.pluginState);
             else if (name == "slicex")
-                sliced = slicex (c.pluginState);
+                sliced = slicexSample (c.pluginState);
 
             if (sliced)
             {

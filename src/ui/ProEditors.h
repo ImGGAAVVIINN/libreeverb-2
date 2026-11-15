@@ -16,6 +16,7 @@ namespace ProEditorWindows
 {
 bool handles (EffectKind kind) noexcept;
 void open (AudioEngine& engine, int track, int slot);
+void close (int track, int slot);
 void closeAll();
 } // namespace ProEditorWindows
 
