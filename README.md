@@ -1,4 +1,4 @@
-# Fruity Reeverb 2 (standalone VST2)
+# Libreeverb 2 (standalone VST2)
 
 A standalone 64-bit Windows VST2 audio effect extracted from
 [LYNX-SHARE](https://github.com/Ka1-S/LYNX-SHARE)'s Fruity Reeverb 2 reconstruction.
@@ -9,7 +9,10 @@ predelay) and embeds LYNX's existing JUCE frontend (`makeNativeEffectEditor` in
 `src/ui/PluginEditors.cpp`) as its editor — no hand-written replacement GUI. The editor
 tracks LYNX's current orange Reeverb 2 theme: the frontend sources under `src/ui/`,
 `src/core/` and their `.inc` assets are direct ports of the corresponding LYNX
-implementation (upstream commit `efb8825`), not a re-skin.
+implementation (upstream commit `efb8825`), not a re-skin. The plugin identifies itself
+to hosts and users as **Libreeverb 2**; the VST uniqueID (`FR2V`) is kept for
+compatibility with existing projects. The binary is named `Libreeverb2.dll` so hosts that
+list VSTs by filename show the new identity.
 
 ## Requirements
 
@@ -25,7 +28,16 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target FruityReeverb2
 ```
 
-The plugin is produced at `build/vst2/FruityReeverb2.dll`.
+The plugin is produced at `build/vst2/Libreeverb2.dll`.
+
+### Compatibility note on the binary name
+
+The DLL was previously named `FruityReeverb2.dll`. Hosts that identify VST2 plugins by
+filename (e.g. LMMS's plugin browser) displayed the old name, so the binary is now
+`Libreeverb2.dll`. The VST uniqueID (`FR2V`), parameter set, state format and `.fst`
+preset compatibility are unchanged. Existing projects that reference
+`FruityReeverb2.dll` must either re-add the effect (it now appears as `Libreeverb2.dll`)
+or keep a copy of the old binary alongside the new one.
 
 On the first configure, JUCE 8.0.4 is downloaded into `build/_deps/` and patched by
 `cmake/LynxPatchJuce.cmake` (MinGW compatibility fixes, including the juceaide

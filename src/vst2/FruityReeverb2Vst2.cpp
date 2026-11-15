@@ -161,15 +161,15 @@ std::intptr_t FruityReeverb2Plugin::dispatch(std::int32_t opcode, std::int32_t i
             return 1;
 
         case effGetEffectName:
-            if (ptr) std::strcpy(static_cast<char*>(ptr), "Fruity Reeverb 2");
+            if (ptr) std::strcpy(static_cast<char*>(ptr), "Libreeverb 2");
             return 1;
 
         case effGetVendorString:
-            if (ptr) std::strcpy(static_cast<char*>(ptr), "LYNX-SHARE");
+            if (ptr) std::strcpy(static_cast<char*>(ptr), "libreeverb-2");
             return 1;
 
         case effGetProductString:
-            if (ptr) std::strcpy(static_cast<char*>(ptr), "Fruity Reeverb 2");
+            if (ptr) std::strcpy(static_cast<char*>(ptr), "Libreeverb 2");
             return 1;
 
         case effGetVendorVersion:

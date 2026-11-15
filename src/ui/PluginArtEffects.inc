@@ -1417,7 +1417,7 @@ inline const Theme& reeverb2Theme()
     static const Theme t = []
     {
         Theme x;
-        x.name = "Fruity Reeverb 2";
+        x.name = "Libreeverb 2";
         x.base = Style::hardware;
         x.pal = { Colour (0xff3a0f17), Colour (0xff12060a), Colour (0xffd8a24a), Colour (0xffffe0b0), Colour (0x9c2a0c12), Colour (0xb8120609),
                   Colour (0xff8a5a3a), Colour (0xfff6e3c4), Colour (0xff0a0305), Colour (0xff3a1a1e), Colour (0xff12070a), Colour (0xff2a0d13),

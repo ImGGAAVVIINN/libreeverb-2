@@ -2704,7 +2704,7 @@ const EffectInfo& effectInfo (EffectKind kind)
                                                                               { "x100", 0.0f }, { "Post filter", 0.0f }, { "Post gain", 1.0f } } };
     // FL's controls as (raw − min) / range (core/Reeverb2.h); defaults = FL's
     static const EffectInfo reeverb2Info = [] {
-        EffectInfo info { "Reeverb 2", { { "Low cut", 0 }, { "High cut", 0 }, { "Predelay", 0 }, { "Room size", 0 }, { "Diffusion", 0 },
+        EffectInfo info { "Libreeverb 2", { { "Low cut", 0 }, { "High cut", 0 }, { "Predelay", 0 }, { "Room size", 0 }, { "Diffusion", 0 },
                                          { "Decay", 0 }, { "High damping", 0 }, { "Bass mult.", 0 }, { "Crossover", 0 }, { "Stereo sep.", 0 },
                                          { "Dry", 0 }, { "Early ref.", 0 }, { "Wet", 0 }, { "Mod speed", 0 }, { "Mod depth", 0 },
                                          { "Tempo predelay", 0 }, { "Mid/side input", 0 } } };

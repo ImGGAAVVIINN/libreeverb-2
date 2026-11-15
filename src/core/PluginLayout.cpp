@@ -530,7 +530,7 @@ Layout reeverb2()
     v.push_back (knob (398, 23, 30, "Decay", TR_NOOP ("Dec"), 48));
     v.push_back (knob (355, 74, 30, "Crossover", TR_NOOP ("Cross"), 100));
     v.push_back (knob (398, 74, 30, "High damping", TR_NOOP ("Damp"), 100));
-    v.push_back (label (334, 118, 90, 36, "Reeverb 2", dim));
+    v.push_back (label (334, 118, 90, 36, "Libreeverb 2", dim));
     v.push_back (section (430, 2, 106, 160, nullptr, boxed));
     v.push_back (slider (Item::vslider, 440, 6, 20, 98, "Dry", TR_NOOP ("Dry")));
     v.push_back (slider (Item::vslider, 471, 6, 20, 98, "Early ref.", TR_NOOP ("ER")));

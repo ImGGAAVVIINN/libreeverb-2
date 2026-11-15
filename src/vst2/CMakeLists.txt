@@ -182,7 +182,7 @@ if(WIN32)
     set_target_properties(FruityReeverb2 PROPERTIES
         PREFIX ""
         SUFFIX ".dll"
-        OUTPUT_NAME "FruityReeverb2"
+        OUTPUT_NAME "Libreeverb2"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vst2"
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vst2"
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vst2"

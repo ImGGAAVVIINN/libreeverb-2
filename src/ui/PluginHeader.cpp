@@ -115,7 +115,17 @@ EffectParams withMixLock (EffectKind kind, EffectParams params, const EffectPara
 
 juce::File userFolder (EffectKind kind)
 {
-    return platform::settingsFile ("Presets").getChildFile (juce::File::createLegalFileName (utf8 (effectInfo (kind).name)));
+    // The folder is named after the effect's display name. When the display name is rebranded
+    // (Reeverb 2 -> Libreeverb 2), carry the old folder over so previously saved user presets
+    // keep loading.
+    auto folder = platform::settingsFile ("Presets").getChildFile (juce::File::createLegalFileName (utf8 (effectInfo (kind).name)));
+    if (kind == EffectKind::reeverb2 && ! folder.isDirectory())
+    {
+        const auto legacy = folder.getParentDirectory().getChildFile ("Reeverb 2");
+        if (legacy.isDirectory())
+            legacy.moveFileTo (folder);
+    }
+    return folder;
 }
 
 juce::Array<juce::File> userPresets (EffectKind kind)
