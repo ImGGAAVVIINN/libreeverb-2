@@ -650,7 +650,7 @@ public:
     {
         // round 170k2: the box gives way to the title (never below 90 px)
         const auto name = headerName();
-        const auto room = prevButton().getX() - 4.0f - 6.0f - (menuButton().getRight() + 40.0f) - skin::titleMinWidth (name, headerHeight);
+        const auto room = prevButton().getX() - 4.0f - 6.0f - (menuButton().getRight() + 22.0f) - skin::titleMinWidth (name, headerHeight);
         const auto w = juce::jlimit (90.0f, juce::jmax (90.0f, room), juce::jlimit (90.0f, 220.0f, (float) getWidth() * 0.32f));
         return { prevButton().getX() - w - 4.0f, 3.0f, w, 20.0f };
     }
@@ -664,9 +664,8 @@ public:
         // options menu (FL's arrow at the left of the plugin's title)
         drawArrow (g, menuButton(), 0.0f, hoverHeader == 1 ? accent : colour::textSecondary);
 
-        // LYNX's mark, bypass LED, name, where it is
-        skin::brandMark (g, juce::Rectangle<float> (menuButton().getRight() + 2.0f, 0.0f, 18.0f, area.getHeight()));
-        const auto ledC = juce::Point<float> (menuButton().getRight() + 30.0f, area.getCentreY());
+        // bypass LED, name, where it is (the mark is gone: the LED follows the menu arrow directly)
+        const auto ledC = juce::Point<float> (menuButton().getRight() + 12.0f, area.getCentreY());
         skin::powerLed (g, ledC, 7.0f, fx.enabled);
         const auto name = headerName();
         auto text = area.withLeft (ledC.x + 10.0f).withRight (presetBox().getX() - 6.0f);
